@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#15181C">
+<title>Circuit Legend</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+/* ============================================================
+   Circuit Legend — visual system
+   Grounded in the subject: steel deadfronts, typed directory
+   cards, and wire-insulation color as functional signal.
+   ============================================================ */
+:root{
+  --steel-950:#0F1216; --steel-900:#15181C; --steel-850:#1B1F25;
+  --steel-800:#232830; --steel-700:#2E343D; --steel-600:#3D4550;
+  --steel-500:#5A6472; --steel-400:#8A94A3;
+  --paper:#E4E1D8; --paper-2:#D5D1C5; --ink:#1A1D21;
+  --live:#FFC24D;            /* energized / selection */
+  --live-dim:#8A6A22;
+  --legA:#D2603A; --legB:#4E8FA8; --legC:#B39442;
+  --ok:#5FA86B; --warn:#E0A33E; --bad:#D2513F;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --r:3px;
+}
+*{box-sizing:border-box}
+html,body{height:100%;height:100dvh;margin:0}
+body{
+  background:var(--steel-950); color:var(--paper);
+  font:14px/1.45 var(--ui); overflow:hidden; overscroll-behavior:none;
+  -webkit-text-size-adjust:100%;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--live);outline-offset:2px}
+
+/* --- app frame --- */
+#app{display:flex;flex-direction:column;height:100%}
+header.bar{
+  position:relative;z-index:30;
+  display:flex;align-items:center;gap:10px;padding:8px 12px;
+  background:linear-gradient(180deg,var(--steel-800),var(--steel-850));
+  border-bottom:1px solid #000;flex:0 0 auto;
+}
+.brand{font:600 12px/1 var(--mono);letter-spacing:.22em;text-transform:uppercase;color:var(--live);white-space:nowrap}
+.brand small{display:block;font-size:9px;letter-spacing:.14em;color:var(--steel-400);margin-top:3px}
+.tabs{display:flex;gap:2px;margin-left:8px}
+.tabs button{
+  background:transparent;border:1px solid transparent;border-radius:var(--r);
+  padding:6px 11px;font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--steel-400);
+}
+.tabs button:hover{color:var(--paper);background:#ffffff0a}
+.tabs button[aria-current=true]{color:var(--ink);background:var(--live);border-color:var(--live)}
+.grow{flex:1}
+.searchwrap{position:relative}
+#search{
+  width:210px;background:var(--steel-950);border:1px solid var(--steel-600);
+  border-radius:var(--r);padding:6px 9px;font:12px var(--mono);color:var(--paper);
+}
+#search::placeholder{color:var(--steel-500)}
+#results{
+  position:absolute;top:110%;right:0;width:340px;max-height:60vh;overflow:auto;z-index:60;
+  background:var(--steel-800);border:1px solid var(--steel-600);border-radius:var(--r);
+  box-shadow:0 18px 40px #000a;padding:4px;display:none;
+}
+#results.on{display:block}
+#results div.hit{padding:7px 9px;border-radius:2px;cursor:pointer;font-size:12px}
+#results div.hit:hover{background:var(--steel-700)}
+#results .k{font:10px var(--mono);letter-spacing:.1em;color:var(--live);text-transform:uppercase}
+
+.iconbtn{
+  background:var(--steel-700);border:1px solid var(--steel-600);border-radius:var(--r);
+  padding:6px 10px;font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--paper);
+}
+.iconbtn:hover:not(:disabled){background:var(--steel-600)}
+.iconbtn:disabled,button:disabled{opacity:.38;cursor:not-allowed}
+.iconbtn.on{background:var(--live);border-color:var(--live);color:var(--ink)}
+.iconbtn.ghost{background:transparent}
+.mobileonly{display:none}
+@media(max-width:900px){.mobileonly{display:inline-block}}
+
+main{flex:1;display:flex;min-height:0}
+#stage{flex:1;min-width:0;position:relative;overflow:auto;background:
+  radial-gradient(ellipse at 50% 0%,#1e242c 0%,var(--steel-950) 70%)}
+#side{
+  width:352px;flex:0 0 352px;background:var(--steel-850);border-left:1px solid #000;
+  overflow:auto;padding:14px;
+}
+
+/* --- typed directory card look for the inspector --- */
+.card{
+  background:var(--steel-800);border:1px solid #0c0e12;border-radius:5px;padding:12px;margin-bottom:14px;
+  box-shadow:inset 0 1px 0 #ffffff0d, 0 1px 3px #0006;
+}
+.card > h3{
+  margin:-12px -12px 11px;padding:9px 12px;background:#00000033;
+  border-bottom:1px solid #00000055;border-radius:5px 5px 0 0;
+  font:700 10px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;
+  color:var(--steel-400);display:flex;align-items:center;gap:8px;
+}
+.card > h3::after{content:"";flex:1}
+.row{display:flex;gap:8px;margin-bottom:8px}
+.row > *{flex:1;min-width:0}
+label.f{display:block;font:600 9px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--steel-400);margin-bottom:4px}
+input.i,select.i,textarea.i{
+  width:100%;background:var(--steel-950);border:1px solid var(--steel-600);border-radius:2px;
+  padding:6px 8px;font:13px var(--mono);color:var(--paper);
+}
+textarea.i{font:13px var(--ui);resize:vertical;min-height:56px}
+input.i:disabled,select.i:disabled,textarea.i:disabled{opacity:.45}
+.chk{display:flex;align-items:center;gap:7px;font-size:12px;padding:5px 0}
+.chk input{accent-color:var(--live);width:15px;height:15px}
+.hint{font-size:11px;color:var(--steel-400);margin-top:-3px;margin-bottom:8px}
+.pill{display:inline-block;font:600 9px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  padding:3px 6px;border-radius:2px;background:var(--steel-700);color:var(--steel-400)}
+.pill.live{background:var(--live);color:var(--ink)}
+.pill.ok{background:#1e3a24;color:var(--ok)} .pill.warn{background:#3a2f14;color:var(--warn)}
+.pill.bad{background:#3a1c17;color:var(--bad)}
+
+ul.list{list-style:none;margin:0;padding:0}
+ul.list li{
+  display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:2px;cursor:pointer;
+  border:1px solid transparent;font-size:13px
+}
+ul.list li:hover{background:var(--steel-700)}
+ul.list li.sel{background:var(--live-dim);border-color:var(--live)}
+ul.list li .sub{font:10px var(--mono);color:var(--steel-400)}
+.empty{color:var(--steel-500);font-size:12px;padding:10px 2px;line-height:1.5}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+
+/* --- stage layouts --- */
+.stagepad{padding:20px;min-height:100%}
+.toolstrip{
+  display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 12px;
+  background:var(--steel-850);border-bottom:1px solid #000;position:sticky;top:0;z-index:20
+}
+.toolstrip .lbl{font:600 9px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--steel-400)}
+
+/* --- panel --- */
+#panelWrap{display:flex;flex-direction:column;align-items:center;padding:22px 12px 60px}
+.deadfront{
+  background:linear-gradient(180deg,#3A424C,#262C34);
+  border:1px solid #0b0d10;border-radius:6px;padding:14px;
+  box-shadow:0 24px 60px #000a, inset 0 1px 0 #ffffff18;
+}
+.deadfront .plate{
+  font:700 10px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:#C9D2DE;
+  display:flex;justify-content:space-between;gap:16px;padding:0 4px 10px;border-bottom:1px solid #ffffff14;margin-bottom:10px
+}
+.deadfront .plate span{color:var(--steel-400);font-weight:600}
+.ladderscroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;display:flex}
+.ladderscroll::-webkit-scrollbar{height:7px}
+.ladderscroll::-webkit-scrollbar-thumb{background:var(--steel-600);border-radius:4px}
+.sidejump{display:none;gap:6px;margin-bottom:9px}
+.sidejump button{
+  flex:1;background:var(--steel-700);border:1px solid var(--steel-600);border-radius:var(--r);
+  color:var(--paper);padding:9px 6px;font:600 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase
+}
+/* segmented A / B switch for tandem circuits */
+.seg{display:flex;gap:4px;margin-bottom:9px}
+.seg button{
+  flex:1;min-width:0;background:var(--steel-950);border:1px solid var(--steel-600);border-radius:2px;
+  color:var(--steel-400);padding:9px 6px;font:600 11px/1 var(--mono);letter-spacing:.06em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.seg button.on{background:var(--live);border-color:var(--live);color:var(--ink)}
+
+/* --- plan --- */
+#planHost{position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:grab}
+#planHost.drag{cursor:grabbing}
+#planHost.place{cursor:crosshair}
+.planempty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;text-align:center;padding:30px}
+.planempty h2{font:700 13px/1.4 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--steel-400);margin:0}
+.planempty p{color:var(--steel-500);max-width:380px;margin:0;font-size:13px}
+.floorstack{position:absolute;left:12px;top:12px;z-index:10;display:flex;flex-direction:column-reverse;gap:4px}
+.floorstack button{
+  background:#0f1216cc;border:1px solid var(--steel-600);border-radius:var(--r);color:var(--steel-400);
+  padding:7px 12px;font:600 11px/1 var(--mono);letter-spacing:.1em;backdrop-filter:blur(6px);text-align:left;min-width:104px
+}
+.floorstack button[aria-current=true]{background:var(--live);color:var(--ink);border-color:var(--live)}
+.zoomctl{position:absolute;right:12px;bottom:12px;z-index:10;display:flex;gap:4px}
+.plantools{position:absolute;right:12px;top:12px;z-index:10;display:flex;flex-direction:column;gap:4px;align-items:stretch}
+.plantools button{
+  background:#0f1216cc;border:1px solid var(--steel-600);border-radius:var(--r);color:var(--steel-400);
+  padding:8px 12px;font:600 10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  backdrop-filter:blur(6px);text-align:left;white-space:nowrap
+}
+.plantools button:hover{color:var(--paper);border-color:var(--steel-500)}
+.plantools button.on{background:var(--live);color:var(--ink);border-color:var(--live)}
+.zoomctl button{width:34px;height:34px;background:#0f1216cc;border:1px solid var(--steel-600);
+  border-radius:var(--r);color:var(--paper);font:600 15px var(--mono);backdrop-filter:blur(6px)}
+.bannerstack{
+  position:absolute;left:50%;transform:translateX(-50%);top:12px;z-index:15;
+  display:flex;flex-direction:column;gap:6px;align-items:center;max-width:calc(100% - 24px)
+}
+.banner{
+  background:var(--live);color:var(--ink);padding:8px 14px;border-radius:var(--r);
+  font:700 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;box-shadow:0 8px 24px #0008;
+  display:flex;align-items:center;gap:12px
+}
+.banner span{white-space:nowrap}
+.banner button{background:#0003;border:0;border-radius:2px;padding:4px 8px;font:700 10px var(--mono);color:var(--ink)}
+.banner.alt{background:var(--steel-800);color:var(--paper);border:1px solid var(--steel-600)}
+.banner.alt button{background:var(--live);color:var(--ink)}
+
+/* --- tables / reports --- */
+table.sched{width:100%;border-collapse:collapse;font:12px var(--mono)}
+table.sched th{
+  text-align:left;font:700 9px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--steel-400);padding:7px 8px;border-bottom:1px solid var(--steel-600);position:sticky;top:0;background:var(--steel-850)
+}
+table.sched td{padding:6px 8px;border-bottom:1px solid var(--steel-800);vertical-align:top}
+table.sched input[type=checkbox]{accent-color:var(--live)}
+table.sched tr:hover td{background:#ffffff06}
+.num{font-variant-numeric:tabular-nums}
+.bars{height:9px;background:var(--steel-800);border-radius:2px;overflow:hidden}
+.bars i{display:block;height:100%}
+
+/* --- modal --- */
+.modal{position:fixed;inset:0;background:#000b;z-index:100;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal .sheet{background:var(--steel-850);border:1px solid var(--steel-600);border-radius:5px;
+  max-width:560px;width:100%;max-height:86vh;overflow:auto;padding:18px;box-shadow:0 30px 80px #000}
+.modal h2{margin:0 0 4px;font:700 12px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--live)}
+/* pointer-events:none matters: the toast sits centred at the bottom and,
+   while transparent, would still swallow taps on whatever is under it. */
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:200;
+  background:var(--paper);color:var(--ink);padding:9px 16px;border-radius:var(--r);
+  font:600 12px var(--mono);box-shadow:0 10px 30px #0009;
+  opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity .2s, visibility 0s linear .2s}
+.toast.on{opacity:1;visibility:visible;transition:opacity .2s, visibility 0s}
+
+/* --- mobile chrome: bottom tab bar, sheet, scrim, fab --- */
+#tabbar{display:none}
+#scrim{display:none}
+#fab{
+  display:none;position:fixed;right:20px;bottom:20px;z-index:45;
+  background:var(--live);color:var(--ink);border:0;border-radius:22px;padding:12px 18px;
+  font:700 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;box-shadow:0 8px 24px #0009
+}
+body.rail-hidden #side{display:none}
+/* On desktop the reopen control is a drawer handle on the right edge:
+   vertically centred so it clears the plan's zoom and tool clusters. */
+body.rail-hidden #fab{
+  display:block;right:0;bottom:auto;top:50%;transform:translateY(-50%);
+  border-radius:5px 0 0 5px;padding:18px 9px;writing-mode:vertical-rl;letter-spacing:.18em
+}
+.sheethead{display:none}
+.tablescroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+@media(max-width:900px){
+  :root{--tabh:calc(58px + env(safe-area-inset-bottom,0px))}
+
+  /* header collapses: brand, search toggle, undo, menu */
+  header.bar{padding:7px 10px;padding-top:calc(7px + env(safe-area-inset-top,0px));gap:7px}
+  .brand{font-size:11px;letter-spacing:.16em}
+  .brand small{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tabs{display:none}
+  .searchwrap{position:static}
+  #search{
+    display:none;position:absolute;left:10px;right:10px;top:100%;width:auto;z-index:70;
+    margin-top:6px;padding:11px 12px;font-size:16px;   /* 16px stops iOS zoom-on-focus */
+    box-shadow:0 10px 30px #0009
+  }
+  body.searching #search{display:block}
+  #results{left:10px;right:10px;width:auto;top:calc(100% + 54px)}
+  .iconbtn{min-height:40px;padding:9px 12px}
+
+  /* bottom tab bar — thumb reach */
+  #tabbar{
+    display:flex;position:fixed;left:0;right:0;bottom:0;z-index:50;
+    background:linear-gradient(180deg,var(--steel-850),var(--steel-900));
+    border-top:1px solid #000;padding-bottom:env(safe-area-inset-bottom,0px)
+  }
+  #tabbar button{
+    flex:1;min-width:0;background:none;border:0;padding:9px 2px 10px;display:flex;flex-direction:column;
+    align-items:center;gap:4px;color:var(--steel-400);
+    font:600 9px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;min-height:58px
+  }
+  #tabbar button span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #tabbar button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.7}
+  #tabbar button[aria-current=true]{color:var(--live)}
+  main{padding-bottom:var(--tabh)}
+
+  /* inspector becomes a bottom sheet that covers the tab bar */
+  #side{
+    position:fixed;inset:auto 0 0 0;width:100%;flex-basis:auto;
+    height:min(84vh,760px);z-index:80;border-left:0;border-top:1px solid var(--steel-600);
+    border-radius:14px 14px 0 0;transform:translateY(101%);transition:transform .22s cubic-bezier(.32,.72,0,1);
+    padding:0 13px calc(20px + env(safe-area-inset-bottom,0px));box-shadow:0 -18px 50px #000a;
+    overscroll-behavior:contain
+  }
+  #side.open{transform:none}
+  .sheethead{
+    display:block;position:sticky;top:0;z-index:2;margin:0 -13px 10px;padding:7px 13px 9px;
+    background:var(--steel-850);border-radius:14px 14px 0 0;border-bottom:1px solid var(--steel-800);
+    touch-action:none
+  }
+  .sheethead .grab{width:38px;height:4px;border-radius:2px;background:var(--steel-600);margin:0 auto 8px}
+  .sheethead .r{display:flex;align-items:center;gap:10px}
+  .sheethead .t{flex:1;font:700 10px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--steel-400)}
+  #scrim{display:block;position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;
+         z-index:70;transition:opacity .22s}
+  body.sheet-open #scrim{opacity:.5;pointer-events:auto}
+
+  /* floating re-open button when something is selected */
+  #fab{
+    display:none;position:fixed;right:12px;bottom:calc(var(--tabh) + 12px);z-index:45;
+    background:var(--live);color:var(--ink);border:0;border-radius:22px;padding:12px 17px;
+    font:700 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;box-shadow:0 8px 24px #0009
+  }
+  body.has-sel:not(.sheet-open) #fab{display:block}
+
+  /* toolstrips scroll sideways instead of stacking */
+  .toolstrip{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:7px 10px;gap:7px}
+  .toolstrip::-webkit-scrollbar{display:none}
+  .toolstrip > *{flex:0 0 auto}
+  .toolstrip .grow{display:none}
+
+  /* the ladder scales to the viewport instead of overflowing */
+  #panelWrap{padding:12px 8px 30px}
+  .deadfront{padding:9px;width:100%}
+  .sidejump{display:flex}
+  .deadfront .plate{font-size:9px;letter-spacing:.12em;flex-wrap:wrap;gap:4px 12px}
+  .stagepad{padding:12px 10px 30px}
+  .card{padding:11px}
+
+  /* wide schedules: drop low-priority columns, scroll the rest */
+  table.sched{font-size:11.5px}
+  table.sched th,table.sched td{padding:7px 6px}
+  table.sched .opt{display:none}
+
+  /* Floors run across the top as a scrolling strip; zoom moves to the
+     bottom-left so it never fights the Details button. */
+  .floorstack{flex-direction:row;left:8px;right:8px;top:8px;overflow-x:auto;padding-bottom:2px}
+  .floorstack::-webkit-scrollbar{display:none}
+  .floorstack button{min-width:0;flex:0 0 auto;padding:10px 13px;font-size:10px}
+  .zoomctl{left:8px;right:auto;bottom:8px}
+  .plantools{left:8px;right:auto;top:auto;bottom:60px;flex-direction:row;flex-wrap:wrap;max-width:calc(100% - 130px)}
+  .plantools button{padding:9px 10px;font-size:9px}
+  .zoomctl button{width:44px;height:44px;font-size:17px}
+  .bannerstack{top:58px}
+  .banner{font-size:10px;padding:9px 12px}
+  /* keep content clear of the floating Details button */
+  .stagepad{padding-bottom:82px}
+  #panelWrap{padding-bottom:82px}
+  .modal{padding:0;align-items:flex-end}
+  .modal .sheet{max-height:92vh;border-radius:14px 14px 0 0;
+                padding-bottom:calc(18px + env(safe-area-inset-bottom,0px))}
+  input.i,select.i,textarea.i{padding:10px 9px;font-size:16px}
+  .chk{padding:9px 0}
+  .chk input{width:19px;height:19px}
+  ul.list li{padding:11px 8px}
+  table.sched input[type=checkbox]{width:19px;height:19px;accent-color:var(--live)}
+  .toast{bottom:calc(var(--tabh) + 14px);max-width:calc(100% - 24px);text-align:center}
+}
+@media(max-width:420px){
+  .brand small{display:none}
+  table.sched .opt2{display:none}
+}
+
+/* --- print: the panel directory card --- */
+#printroot{display:none}
+@media print{
+  @page{size:letter portrait;margin:0.5in}
+  body{background:#fff;color:#000;overflow:visible;height:auto}
+  #app{display:none}
+  #printroot{display:block;font:12px/1.4 var(--mono);color:#000}
+  #printroot h1{font-size:17px;letter-spacing:.12em;text-transform:uppercase;margin:0 0 3px}
+  #printroot .meta{font-size:10.5px;margin-bottom:12px;color:#333}
+  #printroot table{width:100%;border-collapse:collapse;page-break-inside:auto}
+  #printroot th,#printroot td{border:1px solid #888;padding:5px 7px;text-align:left;vertical-align:top;font-size:11.5px}
+  #printroot th{background:#e8e8e8;font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+  #printroot .page{page-break-after:always}
+  #printroot .page:last-child{page-break-after:auto}
+  #printroot tr{page-break-inside:avoid}
+  /* the door directory: generous rows, since it gets read in a dim basement */
+  #printroot .dir{width:100%}
+  #printroot .dir td{height:26px;font-size:12px}
+  #printroot .dir td.spec{font-size:9.5px;color:#444;letter-spacing:.02em}
+  #printroot .dir .empty{color:#aaa}
+  #printroot .dir tbody tr:nth-child(even) td{background:#f4f4f4}
+  .noprint{display:none!important}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="bar">
+    <div class="brand">Circuit&nbsp;Legend<small id="projName">untitled project</small></div>
+    <nav class="tabs" id="tabs">
+      <button data-view="panel">Panel</button>
+      <button data-view="plan">Floor plan</button>
+      <button data-view="devices">Devices</button>
+      <button data-view="rooms">Rooms</button>
+      <button data-view="report">Reports</button>
+    </nav>
+    <div class="grow"></div>
+    <button class="iconbtn ghost mobileonly" id="searchBtn" title="Search" aria-expanded="false">Find</button>
+    <div class="searchwrap">
+      <input id="search" type="search" placeholder="Search breakers, devices…" autocomplete="off">
+      <div id="results"></div>
+    </div>
+    <button class="iconbtn ghost" id="undoBtn" title="Undo last change">Undo</button>
+    <button class="iconbtn ghost" id="menuBtn" title="Project menu">Project</button>
+  </header>
+  <main>
+    <div id="stage"></div>
+    <aside id="side"></aside>
+  </main>
+  <nav id="tabbar" aria-label="Sections"></nav>
+</div>
+<div id="scrim"></div>
+<button id="fab">Details</button>
+<div id="printroot"></div>
+<div id="toast" class="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
