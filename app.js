@@ -251,6 +251,7 @@ const state = {
   devSort: { key: 'label', dir: 1 },
   devSelected: new Set(),
   imgURL: {},           // floorId -> objectURL
+  moving: null,         // breakerId being relocated on the ladder
   undo: [], wake: null, sideOpen: false
 };
 
@@ -337,10 +338,17 @@ function renderPanelView() {
   if (!pan) return;
   state.panelId = pan.id;
 
+  /* A breaker being relocated: the ladder becomes a destination picker
+     until a space is chosen or the move is cancelled. */
+  if (state.moving && !breakerById(state.moving)) state.moving = null;
+  let mv = state.moving ? breakerById(state.moving) : null;
+  if (mv && mv.panelId !== pan.id) { state.moving = null; mv = null; }
+
   /* toolbar */
+  const top = el('div', { class: 'stagetop' });
   const tools = el('div', { class: 'toolstrip' });
   tools.appendChild(el('span', { class: 'lbl' }, ['Panel']));
-  const psel = el('select', { class: 'i', style: 'flex:0 0 auto;width:auto', onchange: e => { state.panelId = e.target.value; state.sel = { breaker: null, circuit: null, device: null, room: null }; render(); } });
+  const psel = el('select', { class: 'i', style: 'flex:0 0 auto;width:auto', onchange: e => { state.moving = null; state.panelId = e.target.value; state.sel = { breaker: null, circuit: null, device: null, room: null }; render(); } });
   P().panels.forEach(x => psel.appendChild(el('option', { value: x.id, selected: x.id === pan.id ? 'selected' : null }, [x.name])));
   tools.appendChild(psel);
   tools.appendChild(el('button', { class: 'iconbtn', onclick: addPanel }, ['+ Panel']));
@@ -348,7 +356,14 @@ function renderPanelView() {
   tools.appendChild(el('span', { class: 'grow' }));
   tools.appendChild(el('button', { class: 'iconbtn' + (state.discovery ? ' on' : ''), onclick: toggleDiscovery }, ['Discovery mode']));
   tools.appendChild(el('button', { class: 'iconbtn', onclick: () => printDirectory(pan) }, ['Print directory']));
-  stage.appendChild(tools);
+  top.appendChild(tools);
+  if (mv) {
+    const bar = el('div', { class: 'movebar' });
+    bar.appendChild(el('span', {}, [`Moving slot ${slotsFor(mv.slot, mv.poles).join('/')}${mv.label ? ' — ' + trunc(mv.label, 24) : ''} — tap a destination`]));
+    bar.appendChild(el('button', { onclick: cancelMove }, ['Cancel']));
+    top.appendChild(bar);
+  }
+  stage.appendChild(top);
 
   const rows = Math.ceil(pan.spaces / 2);
   const W = COLW * 2 + BUSW, H = rows * ROWH + HEAD * 2;
@@ -385,15 +400,20 @@ function renderPanelView() {
   const legTxt = svgEl('text', { x: COLW + BUSW / 2, y: H - 1, 'text-anchor': 'middle', fill: '#8A94A3', 'font-size': 7, 'font-family': 'var(--mono)' });
   legTxt.textContent = 'BUS'; svg.appendChild(legTxt);
 
-  /* empty spaces (clickable to add) */
+  /* empty spaces — clickable to add, or to receive a breaker being moved */
   for (let s = 1; s <= pan.spaces; s++) {
     if (breakerAtSlot(pan.id, s)) continue;
     const x = colOf(s) === 0 ? 0 : COLW + BUSW, y = HEAD + rowOf(s) * ROWH;
-    const g = svgEl('g', { class: 'slot', tabindex: 0, role: 'button', 'aria-label': `Empty space ${s}. Add breaker.`, style: 'cursor:pointer' });
-    g.appendChild(svgEl('rect', { x: x + 3, y: y + 3, width: COLW - 6, height: ROWH - 6, rx: 2, fill: '#0d1014', stroke: '#ffffff10', 'stroke-dasharray': '3 3' }));
-    const t = svgEl('text', { x: x + COLW / 2, y: y + ROWH / 2 + 4, 'text-anchor': 'middle', fill: '#4A525C', 'font-size': 11, 'font-family': 'var(--mono)', 'letter-spacing': '.1em' });
-    t.textContent = 'EMPTY'; g.appendChild(t);
-    const act = () => addBreaker(pan, s);
+    const chk = mv ? moveCheck(mv, s) : null;
+    const drop = !!(chk && chk.ok), no = !!(chk && !chk.ok);
+    const g = svgEl('g', { class: 'slot', tabindex: no ? null : 0, role: 'button', style: no ? 'cursor:not-allowed' : 'cursor:pointer',
+      'aria-label': mv ? (drop ? `Move to space ${s}` : `Space ${s} — will not fit`) : `Empty space ${s}. Add breaker.` });
+    g.appendChild(svgEl('rect', { x: x + 3, y: y + 3, width: COLW - 6, height: ROWH - 6, rx: 2,
+      fill: drop ? '#2A2415' : '#0d1014', stroke: drop ? 'var(--live)' : '#ffffff10',
+      'stroke-width': drop ? 2 : 1, 'stroke-dasharray': '3 3', opacity: no ? .3 : 1 }));
+    const t = svgEl('text', { x: x + COLW / 2, y: y + ROWH / 2 + 4, 'text-anchor': 'middle', fill: drop ? 'var(--live)' : '#4A525C', 'font-size': 11, 'font-family': 'var(--mono)', 'letter-spacing': '.1em', opacity: no ? .3 : 1 });
+    t.textContent = drop ? 'MOVE HERE' : 'EMPTY'; g.appendChild(t);
+    const act = drop ? () => moveBreaker(mv, s) : no ? () => toast(chk.why) : () => addBreaker(pan, s);
     g.addEventListener('click', act);
     g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(); } });
     svg.appendChild(g);
@@ -478,6 +498,39 @@ function renderPanelView() {
       g.addEventListener('click', act);
       g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(); } });
     }
+
+    /* While a move is in flight the whole breaker becomes one target: an
+       overlay on top of the normal artwork, so selection and the tandem
+       half-buttons underneath stay untouched when the move ends. */
+    if (mv) {
+      const self = b.id === mv.id;
+      const chk = self ? null : moveCheck(mv, b.slot);
+      const ok = !self && chk.ok;
+      const ov = svgEl('rect', {
+        x: x + 3, y: y + 3, width: COLW - 6, height: h - 6, rx: 3,
+        fill: self || ok ? 'var(--live)' : '#0F1216', opacity: self ? .12 : (ok ? .18 : .7),
+        stroke: self || ok ? 'var(--live)' : 'none', 'stroke-width': 2,
+        'stroke-dasharray': self ? '5 4' : null,
+        style: ok || self ? 'cursor:pointer' : 'cursor:not-allowed'
+      });
+      ov.addEventListener('click', ev => {
+        ev.stopPropagation();
+        if (self) cancelMove();
+        else if (ok) moveBreaker(mv, b.slot);
+        else toast(chk.why);
+      });
+      g.appendChild(ov);
+      if (ok) {
+        /* A badge rather than bare text: it has to stay readable sitting
+           on top of whatever label the breaker already carries. */
+        g.appendChild(svgEl('rect', { x: x + COLW / 2 - 24, y: y + h / 2 - 9, width: 48, height: 18, rx: 2,
+          fill: 'var(--live)', 'pointer-events': 'none' }));
+        const sw = svgEl('text', { x: x + COLW / 2, y: y + h / 2 + 4, 'text-anchor': 'middle',
+          fill: 'var(--ink)', 'font-size': 10, 'font-family': 'var(--mono)', 'font-weight': 700,
+          'letter-spacing': '.1em', 'pointer-events': 'none' });
+        sw.textContent = 'SWAP'; g.appendChild(sw);
+      }
+    }
     svg.appendChild(g);
   });
 
@@ -510,6 +563,7 @@ function renderPanelView() {
   wrap.appendChild(dead);
   wrap.addEventListener('click', e => {
     if (e.target.closest('g, button, input, select, textarea, label')) return;
+    if (state.moving) return cancelMove();
     if (hasSelection()) clearSelection();
   });
 
@@ -565,6 +619,101 @@ function addBreaker(pan, slot) {
   state.sideOpen = true;
   render();
 }
+/* ---------- relocating a breaker ----------
+   A rebuilt panel puts the same circuits on different spaces. Everything
+   worth keeping — label, rating, wire, notes, photo, handle tie, and every
+   circuit and device hanging off it — lives on the breaker record, so a
+   move is a change of `slot` and nothing else. When the destination is
+   taken the two breakers trade places, because that is what a rebuild
+   usually amounts to.                                                    */
+function moveCheck(b, slot) {
+  const pan = panelById(b.panelId);
+  if (!pan) return { ok: false, why: 'That breaker has no panel' };
+  if (b.locked) return { ok: false, why: 'This breaker is locked — unlock it first' };
+  if (slot === b.slot) return { ok: false, why: 'Already in slot ' + slot };
+  const want = slotsFor(slot, b.poles);
+  if (slot < 1 || want.some(s => s > pan.spaces))
+    return { ok: false, why: `A ${b.poles}-pole breaker at slot ${slot} would run past slot ${pan.spaces}` };
+  const inTheWay = P().breakers.filter(x => x.panelId === pan.id && x.id !== b.id
+    && slotsFor(x.slot, x.poles).some(s => want.includes(s)));
+  if (!inTheWay.length) return { ok: true, want };
+  if (inTheWay.length > 1)
+    return { ok: false, why: `${inTheWay.length} breakers sit across slot ${slot} — move them one at a time` };
+  /* One occupant: it takes the slots this breaker is vacating. */
+  const o = inTheWay[0];
+  if (o.locked) return { ok: false, why: `Slot ${o.slot} is locked — unlock it first` };
+  const back = slotsFor(b.slot, o.poles);
+  if (back.some(s => s > pan.spaces))
+    return { ok: false, why: `Slot ${o.slot} is ${o.poles}-pole and will not fit back into slot ${b.slot}` };
+  if (back.some(s => want.includes(s)))
+    return { ok: false, why: `Slots ${b.slot} and ${slot} overlap — the two cannot trade places` };
+  const blocked = P().breakers.find(x => x.panelId === pan.id && x.id !== b.id && x.id !== o.id
+    && slotsFor(x.slot, x.poles).some(s => back.includes(s)));
+  if (blocked) return { ok: false, why: `Slot ${blocked.slot} blocks the swap back into slot ${b.slot}` };
+  return { ok: true, want, swap: o, back };
+}
+/* Only the "listed slots" rule is enforceable from the model, and it is
+   the same rule the Report checks, so the two never disagree. */
+function tandemListed(pan, b, slot) {
+  if (!b.tandem || pan.tandemSlots !== 'list') return true;
+  return String(pan.tandemList || '').split(/[,\s]+/).filter(Boolean).map(Number).includes(slot);
+}
+function moveTargets(b) {
+  const pan = panelById(b.panelId);
+  const out = [];
+  if (!pan || b.locked) return out;
+  for (let s = 1; s <= pan.spaces; s++) {
+    const chk = moveCheck(b, s);
+    if (!chk.ok) continue;
+    const where = chk.swap ? 'swap with ' + trunc(chk.swap.label || chk.swap.amps + 'A ' + chk.swap.type, 20) : 'empty';
+    out.push([s, `${s} — ${where} · leg ${legOf(pan, s)}`]);
+  }
+  return out;
+}
+function moveBreaker(b, slot) {
+  const chk = moveCheck(b, slot);
+  if (!chk.ok) { toast(chk.why); return false; }
+  const pan = panelById(b.panelId), from = b.slot;
+  edit(() => { b.slot = slot; if (chk.swap) chk.swap.slot = from; });
+  state.moving = null;
+  /* Keep the tandem half that was open, but only if it is really this
+     breaker's — a move started from the ladder can have anything selected. */
+  const keep = circuitsOf(b.id).find(c => c.id === state.sel.circuit);
+  state.sel = { breaker: b.id, circuit: keep ? keep.id : null, device: null, room: null };
+  render();
+  const stray = [b, chk.swap].filter(Boolean).filter(x => !tandemListed(pan, x, x.slot));
+  toast((chk.swap ? `Slot ${from} and slot ${slot} swapped` : `Moved to slot ${slot} · leg ${legOf(pan, slot)}`)
+    + (stray.length ? ' — tandem now in an unlisted slot, see checks' : ''));
+  return true;
+}
+function startMoving(id) {
+  const b = breakerById(id); if (!b) return;
+  if (b.locked) return toast('This breaker is locked — unlock it first');
+  if (!moveTargets(b).length) return toast('Nowhere in this panel it can go');
+  state.moving = id;
+  state.view = 'panel';
+  state.panelId = b.panelId;
+  if (isMobile()) state.sideOpen = false;
+  render();
+  toast('Tap a space in the ladder to move this breaker there');
+}
+function cancelMove() { state.moving = null; render(); }
+
+/* Re-landing loads is the other half of a rebuild: the breaker stays put
+   but the wires under it changed. Locked devices are left behind, the
+   same way bulk edits in the Devices list treat them. */
+function moveCircuitLoads(c, toId) {
+  const to = circuitById(toId);
+  if (!to || to.id === c.id) return;
+  const ds = devicesOf(c.id);
+  let moved = 0, held = 0;
+  edit(() => { ds.forEach(d => { if (d.locked) { held++; return; } d.circuitId = to.id; moved++; }); });
+  state.sel = { breaker: to.breakerId, circuit: circuitsOf(to.breakerId).length > 1 ? to.id : null, device: null, room: null };
+  render();
+  toast(`${moved} device${moved === 1 ? '' : 's'} moved to ${circuitLabel(to)}`
+    + (held ? ` · ${held} locked and left behind` : ''));
+}
+
 function addPanel() {
   const name = prompt('Name for the new panel', 'Subpanel ' + (P().panels.length));
   if (!name) return;
@@ -1474,6 +1623,22 @@ function sideBreaker(side, b) {
   head.appendChild(field('Verification', selectFor(b, 'verify', VERIFY)));
   side.appendChild(head);
 
+  /* position — a rebuilt panel puts the same circuits on new spaces */
+  const pos = el('div', { class: 'card' });
+  pos.appendChild(el('h3', {}, ['Position', el('span', { class: 'pill' }, ['leg ' + legOf(pan, b.slot)])]));
+  const targets = moveTargets(b);
+  const msel = el('select', { class: 'i', disabled: targets.length ? null : 'disabled', onchange: e => { if (e.target.value) moveBreaker(b, +e.target.value); } });
+  msel.appendChild(el('option', { value: '' },
+    [locked ? '— locked —' : targets.length ? '— move to slot —' : '— nowhere to move —']));
+  targets.forEach(([v, n]) => msel.appendChild(el('option', { value: v }, [n])));
+  pos.appendChild(field('Move to slot', msel));
+  pos.appendChild(el('button', { class: 'iconbtn', style: 'width:100%', disabled: targets.length ? null : 'disabled',
+    onclick: () => startMoving(b.id) }, ['Pick a space on the ladder']));
+  pos.appendChild(el('div', { class: 'hint' }, [locked
+    ? 'Unlock this breaker to move it.'
+    : 'The label, rating, wire, notes and every device on this breaker travel with it. Landing on an occupied space swaps the two breakers.']));
+  side.appendChild(pos);
+
   /* toggles */
   const tg = el('div', { class: 'card' });
   tg.appendChild(el('h3', {}, ['Configuration']));
@@ -1539,6 +1704,19 @@ function sideBreaker(side, b) {
     if (!ds.length) cc.appendChild(el('div', { class: 'empty' }, ['Nothing on this circuit yet.']));
     cc.appendChild(ul);
     cc.appendChild(el('button', { class: 'iconbtn', style: 'width:100%;margin-top:8px', onclick: () => startPlacing(c.id) }, ['+ Add device on plan']));
+    /* Re-landing: the breaker stays where it is, the loads under it change. */
+    const dests = [];
+    P().panels.forEach(pp => breakersOf(pp.id).forEach(x => circuitsOf(x.id).forEach(xc => {
+      if (xc.id === c.id) return;
+      dests.push([xc.id, `${pp.name} · ${x.slot}${xc.sub || ''}${x.label ? ' — ' + trunc(x.label, 18) : ''}`]);
+    })));
+    const canReland = !locked && ds.length && dests.length;
+    const dsel = el('select', { class: 'i', disabled: canReland ? null : 'disabled',
+      onchange: e => { if (e.target.value) moveCircuitLoads(c, e.target.value); } });
+    dsel.appendChild(el('option', { value: '' }, [ds.length ? (locked ? '— locked —' : '— move loads to —') : '— nothing on this circuit —']));
+    dests.forEach(([v, n]) => dsel.appendChild(el('option', { value: v }, [n])));
+    cc.appendChild(field('Move loads to another circuit', dsel,
+      'Reassigns every device here. Use this when the wiring was re-landed but the breaker stayed put — to move the breaker itself, use Position above.'));
     side.appendChild(cc);
   });
 
@@ -2033,6 +2211,7 @@ function buildTabbar() {
 }
 function goView(v) {
   state.view = v;
+  if (v !== 'panel') state.moving = null;
   if (v === 'plan') state.planFitted = false;
   render();
 }
@@ -2172,8 +2351,8 @@ async function boot() {
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'p') { /* let the browser print what we last built */ }
     if (e.key === 'Escape') {
-      const wasPlacing = !!state.placing;
-      state.placing = null; $('#results').classList.remove('on');
+      const wasPlacing = !!state.placing || !!state.moving;
+      state.placing = null; state.moving = null; $('#results').classList.remove('on');
       document.body.classList.remove('searching');
       if (isMobile() && state.sideOpen) closeSheet();
       else if (!wasPlacing && hasSelection()) clearSelection();

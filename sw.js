@@ -2,7 +2,7 @@
    Scope is the directory this file is served from, so the app can
    live at /breakers/ alongside other PWAs on the same origin.
    Cache names are namespaced to avoid colliding with sibling apps. */
-const CACHE = 'circuitlegend-v1';
+const CACHE = 'circuitlegend-v2';
 const ASSETS = ['./', './index.html', './app.js', './manifest.webmanifest'];
 
 self.addEventListener('install', e => {
@@ -11,7 +11,9 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(ks => Promise.all(ks.filter(k => k.startsWith('circuitlegend-') || k.startsWith('panelbook-') && k !== CACHE).map(k => caches.delete(k))))
+      /* `&&` binds tighter than `||`, so without the parentheses the cache
+         that was just precached on install is deleted on activate. */
+      .then(ks => Promise.all(ks.filter(k => (k.startsWith('circuitlegend-') || k.startsWith('panelbook-')) && k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });

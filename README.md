@@ -79,6 +79,34 @@ only what 1A feeds, because the two halves have their own handles and one stayin
 live while the other is off is exactly the situation worth documenting. An A / B
 switch in the details pane moves between them.
 
+## Moving circuits
+
+A rebuilt panel puts the same circuits on different spaces, so both halves of
+that are editable after the fact.
+
+**Moving a breaker** — the *Position* card in a breaker's details. Pick a slot
+from the list, or press **Pick a space on the ladder** and tap the destination.
+Everything hangs off the breaker record, so the label, rating, wire, notes,
+photo, handle tie, verification and every circuit and device below it travel
+with it; only the slot number changes. The phase leg is shown next to each
+candidate slot, which is what you want when the balance readout tells you a
+heavy circuit is on the wrong leg.
+
+Landing on an occupied space **swaps** the two breakers — the one already there
+takes the slots you vacated. A swap is refused rather than half-applied when it
+cannot work cleanly: more than one breaker across the destination, a multi-pole
+that would run past the last space or would not fit back into the slots you
+left, or either breaker being locked. The ladder greys out every space that
+would fail and tells you why if you tap one.
+
+**Moving loads** — *Move loads to another circuit*, in the circuit card. This
+reassigns every device on the circuit to another circuit anywhere in the
+project, for when the breaker stayed put but the wiring under it was re-landed.
+Locked devices are left behind and the count is reported.
+
+Both are one undo step (`Ctrl`/`Cmd` + `Z`), and `Esc` cancels a move in
+progress.
+
 ## Panel size
 
 **Spaces** accepts any number from 2 to 200, with common sizes offered as
@@ -147,7 +175,7 @@ rail is a sheet: **Close**, tap outside, or drag the grabber down, and
 ## Keyboard
 
 - `Ctrl`/`Cmd` + `Z` — undo
-- `Esc` — cancel pin placement, close search
+- `Esc` — cancel pin placement or a breaker move, close search
 - `Tab` / `Enter` — breakers and pins are focusable and activatable
 
 ## Model notes
