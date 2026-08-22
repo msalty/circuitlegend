@@ -68,7 +68,8 @@ const Store = (() => {
     open, isMemory: () => memory,
     get: (store, k) => tx(store, 'readonly', (s, m) => m ? m.get(k) : s.get(k)),
     put: (store, k, v) => tx(store, 'readwrite', (s, m) => m ? (m.set(k, v), v) : s.put(v, k)),
-    del: (store, k) => tx(store, 'readwrite', (s, m) => m ? m.delete(k) : s.delete(k))
+    del: (store, k) => tx(store, 'readwrite', (s, m) => m ? m.delete(k) : s.delete(k)),
+    keys: store => tx(store, 'readonly', (s, m) => m ? Array.from(m.keys()) : s.getAllKeys())
   };
 })();
 
@@ -269,6 +270,7 @@ const state = {
   /* Which inspector sections are expanded. Kept here rather than on the
      DOM because render() rebuilds the rail on every keystroke. */
   disc: { config: false, move: false, naming: false, reland: false, notes: false, danger: false },
+  busy: false,          // a backup is being built; block a second one
   undo: [], wake: null, sideOpen: false
 };
 
@@ -1222,9 +1224,10 @@ function renderReportView() {
   tools.appendChild(el('span', { class: 'lbl' }, ['Reports']));
   tools.appendChild(el('button', { class: 'iconbtn on', onclick: () => printDirectory(pan) }, ['Print panel directory']));
   tools.appendChild(el('button', { class: 'iconbtn', onclick: () => printFullReport() }, ['Print full report']));
-  tools.appendChild(el('button', { class: 'iconbtn', onclick: exportJSON }, ['Export JSON']));
+  tools.appendChild(el('button', { class: 'iconbtn', onclick: exportBackup, title: 'Project data and every image, in one re-importable file' }, ['Export backup']));
+  tools.appendChild(el('button', { class: 'iconbtn', onclick: exportJSON, title: 'Project data only, without images' }, ['Export JSON']));
   tools.appendChild(el('button', { class: 'iconbtn', onclick: exportCSV }, ['Export CSV']));
-  tools.appendChild(el('button', { class: 'iconbtn', onclick: importJSON }, ['Import JSON']));
+  tools.appendChild(el('button', { class: 'iconbtn', onclick: importProject }, ['Import']));
   stage.appendChild(tools);
 
   const pad = el('div', { class: 'stagepad' });
@@ -2179,16 +2182,206 @@ function printFullReport() {
 }
 
 /* ============================================================
+   BACKUP ARCHIVE
+   A full-fidelity backup is a real .zip, so it opens anywhere and the
+   images inside are browsable — but nothing here depends on a library.
+   Entries are stored uncompressed, which images already are, and the
+   file data is handed to the Blob constructor as Blob parts, so image
+   bytes are never copied through a JS string. Only the CRC needs to
+   read them, one file at a time.
+   ============================================================ */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+const dosTime = d => ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF;
+const dosDate = d => ((Math.max(0, d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF;
+
+async function zipWrite(entries) {
+  if (entries.length > 0xFFFF) throw new Error('Too many files for a plain zip');
+  const enc = new TextEncoder();
+  const now = new Date(), time = dosTime(now), date = dosDate(now);
+  const parts = [], central = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = enc.encode(e.name);
+    const blob = e.blob instanceof Blob ? e.blob : new Blob([e.blob]);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const crc = crc32(bytes), size = bytes.length;
+    if (offset + 30 + name.length + size > 0xFFFFFFFF) throw new Error('Backup is larger than a plain zip can address');
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true);
+    lh.setUint16(4, 20, true);              /* version needed        */
+    lh.setUint16(6, 0x0800, true);          /* names are UTF-8       */
+    lh.setUint16(8, 0, true);               /* stored, not deflated  */
+    lh.setUint16(10, time, true); lh.setUint16(12, date, true);
+    lh.setUint32(14, crc, true);
+    lh.setUint32(18, size, true); lh.setUint32(22, size, true);
+    lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    parts.push(new Uint8Array(lh.buffer), name, blob);
+    central.push({ name, crc, size, offset });
+    offset += 30 + name.length + size;
+  }
+  const cdStart = offset;
+  central.forEach(c => {
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true);
+    ch.setUint16(4, 20, true); ch.setUint16(6, 20, true);
+    ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true);
+    ch.setUint16(12, time, true); ch.setUint16(14, date, true);
+    ch.setUint32(16, c.crc, true);
+    ch.setUint32(20, c.size, true); ch.setUint32(24, c.size, true);
+    ch.setUint16(28, c.name.length, true);
+    ch.setUint32(38, 0, true);              /* external attributes   */
+    ch.setUint32(42, c.offset, true);
+    parts.push(new Uint8Array(ch.buffer), c.name);
+    offset += 46 + c.name.length;
+  });
+  const eo = new DataView(new ArrayBuffer(22));
+  eo.setUint32(0, 0x06054b50, true);
+  eo.setUint16(8, central.length, true); eo.setUint16(10, central.length, true);
+  eo.setUint32(12, offset - cdStart, true);
+  eo.setUint32(16, cdStart, true);
+  parts.push(new Uint8Array(eo.buffer));
+  return new Blob(parts, { type: 'application/zip' });
+}
+
+/* Reading stays lazy: entries come back as slices of the picked File, so
+   a large archive is never held in memory all at once. */
+async function zipRead(file) {
+  const tailLen = Math.min(file.size, 66000);
+  if (tailLen < 22) throw new Error('Not a zip archive');
+  const tail = new Uint8Array(await file.slice(file.size - tailLen).arrayBuffer());
+  let p = -1;
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 0x05 && tail[i + 3] === 0x06) { p = i; break; }
+  }
+  if (p < 0) throw new Error('Not a zip archive');
+  const eo = new DataView(tail.buffer, tail.byteOffset + p, 22);
+  const count = eo.getUint16(10, true);
+  const cdSize = eo.getUint32(12, true), cdOff = eo.getUint32(16, true);
+  if (cdOff === 0xFFFFFFFF || count === 0xFFFF) throw new Error('Zip64 archives are not supported');
+  const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer());
+  const dec = new TextDecoder();
+  const dir = new Map();
+  let o = 0;
+  for (let i = 0; i < count; i++) {
+    if (o + 46 > cd.byteLength || cd.getUint32(o, true) !== 0x02014b50) throw new Error('Damaged zip directory');
+    const method = cd.getUint16(o + 10, true);
+    const csize = cd.getUint32(o + 20, true);
+    const nlen = cd.getUint16(o + 28, true), elen = cd.getUint16(o + 30, true), clen = cd.getUint16(o + 32, true);
+    const lho = cd.getUint32(o + 42, true);
+    dir.set(dec.decode(new Uint8Array(cd.buffer, cd.byteOffset + o + 46, nlen)), { method, csize, lho });
+    o += 46 + nlen + elen + clen;
+  }
+  /* The local header's extra field can differ from the central one, so
+     where the data actually starts is resolved per entry, on demand. */
+  const read = async e => {
+    const lh = new DataView(await file.slice(e.lho, e.lho + 30).arrayBuffer());
+    if (lh.getUint32(0, true) !== 0x04034b50) throw new Error('Damaged zip entry');
+    const start = e.lho + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+    const raw = file.slice(start, start + e.csize);
+    if (e.method === 0) return raw;
+    if (e.method === 8) {
+      if (typeof DecompressionStream !== 'function') throw new Error('That backup is compressed and this browser cannot expand it');
+      return new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+    }
+    throw new Error('Unsupported zip compression method ' + e.method);
+  };
+  return { names: () => Array.from(dir.keys()), get: n => dir.has(n) ? read(dir.get(n)) : Promise.resolve(null) };
+}
+
+/* ============================================================
    IMPORT / EXPORT
    ============================================================ */
-function download(name, text, mime) {
-  const b = new Blob([text], { type: mime || 'application/json' });
-  const a = el('a', { href: URL.createObjectURL(b), download: name });
-  document.body.appendChild(a); a.click(); a.remove();
+/* Every key in the project that names something in the blob store. Walking
+   the graph rather than listing the fields means a new kind of attachment
+   is backed up without anyone remembering to come back here. */
+function blobKeysOf(obj, out) {
+  out = out || new Set();
+  if (!obj || typeof obj !== 'object') return out;
+  if (Array.isArray(obj)) { obj.forEach(x => blobKeysOf(x, out)); return out; }
+  for (const k in obj) {
+    const v = obj[k];
+    if (typeof v === 'string' && v && /Key$/.test(k)) out.add(v);
+    else if (v && typeof v === 'object') blobKeysOf(v, out);
+  }
+  return out;
 }
+const IMG_EXT = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+  'image/avif': 'avif', 'image/heic': 'heic', 'image/heif': 'heif', 'image/svg+xml': 'svg',
+  'image/bmp': 'bmp', 'image/tiff': 'tif', 'application/pdf': 'pdf'
+};
+/* Used only when restoring an archive with no usable manifest entry: a blob
+   sliced out of a zip carries no type, and an untyped image is not reliably
+   renderable, so the extension has to stand in for it. */
+const EXT_MIME = Object.keys(IMG_EXT).reduce((m, k) => (m[IMG_EXT[k]] = k, m), { jpeg: 'image/jpeg' });
+const slug = s => String(s || 'panel').replace(/\W+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'panel';
+const fmtSize = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+
+function download(name, data, mime) {
+  const b = data instanceof Blob ? data : new Blob([data], { type: mime || 'application/json' });
+  const url = URL.createObjectURL(b);
+  const a = el('a', { href: url, download: name });
+  document.body.appendChild(a); a.click(); a.remove();
+  /* Revoking immediately can cancel the download in some browsers; not
+     revoking at all pins the whole archive until the page is closed. */
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+async function exportBackup() {
+  if (state.busy) return;
+  state.busy = true;
+  try {
+    toast('Building backup…');
+    const entries = [], images = [];
+    let missing = 0;
+    for (const key of blobKeysOf(P())) {
+      let blob = null;
+      try { blob = await Store.get('blobs', key); } catch (e) {}
+      if (!blob) { missing++; images.push({ key, missing: true }); continue; }
+      const type = blob.type || 'application/octet-stream';
+      const name = 'images/' + key + '.' + (IMG_EXT[type] || 'bin');
+      entries.push({ name, blob });
+      images.push({ key, file: name, type, size: blob.size });
+    }
+    const manifest = {
+      app: 'circuit-legend', kind: 'backup', v: 1,
+      exported: new Date().toISOString(),
+      project: { id: P().id, name: P().name },
+      images
+    };
+    entries.unshift(
+      { name: 'project.json', blob: new Blob([JSON.stringify(P(), null, 2)], { type: 'application/json' }) },
+      { name: 'manifest.json', blob: new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }) }
+    );
+    const zip = await zipWrite(entries);
+    const stamp = new Date().toISOString().slice(0, 10);
+    download(`${slug(P().name)}-circuit-legend-backup-${stamp}.zip`, zip);
+    toast(`Backup saved · ${plural(entries.length - 2, 'image')} · ${fmtSize(zip.size)}`
+      + (missing ? ` · ${plural(missing, 'image')} missing from storage` : ''));
+  } catch (e) {
+    alert('The backup could not be built: ' + e.message);
+  } finally { state.busy = false; }
+}
+
 function exportJSON() {
-  download((P().name || 'panel').replace(/\W+/g, '-').toLowerCase() + '-circuit-legend.json', JSON.stringify(P(), null, 2));
-  toast('Exported. Images are not included — keep them alongside.');
+  download(slug(P().name) + '-circuit-legend.json', JSON.stringify(P(), null, 2));
+  const n = blobKeysOf(P()).size;
+  toast(n ? `Project data exported — ${plural(n, 'image')} not included, use Export backup for those`
+          : 'Project data exported');
 }
 function exportCSV() {
   const rows = [['panel', 'slot', 'sub', 'amps', 'poles', 'type', 'wire', 'leg', 'label', 'hacr', 'locked', 'tie', 'subpanel', 'verify', 'room', 'floor', 'device', 'kind', 'va', 'critical']];
@@ -2203,24 +2396,101 @@ function exportCSV() {
     });
   })));
   const csv = rows.map(r => r.map(v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n');
-  download((P().name || 'panel').replace(/\W+/g, '-').toLowerCase() + '-circuits.csv', csv, 'text/csv');
+  download(slug(P().name) + '-circuits.csv', csv, 'text/csv');
 }
-function importJSON() {
-  const inp = el('input', { type: 'file', accept: '.json,application/json', style: 'display:none', onchange: e => {
-    const f = e.target.files[0]; if (!f) return;
-    const rd = new FileReader();
-    rd.onload = () => {
+
+/* Swapping in a different project: one place, so nothing that has to be
+   reset for the new data gets forgotten by one of the import paths. */
+function adoptProject(data) {
+  state.project = data;
+  state.panelId = data.panels.length ? data.panels[0].id : null;
+  state.floorId = null;
+  state.planFitted = false;
+  state.moving = null;
+  state.placing = null;
+  state.sel = { breaker: null, circuit: null, device: null, room: null };
+  state.devSelected = new Set();
+  touch();
+}
+
+async function importBackupFile(file) {
+  const zip = await zipRead(file);
+  const pj = await zip.get('project.json');
+  if (!pj) throw new Error('there is no project.json inside that archive');
+  const data = JSON.parse(await pj.text());
+  if (!data.panels || !data.breakers) throw new Error('that archive does not hold a Circuit Legend project');
+  let manifest = null;
+  const mf = await zip.get('manifest.json');
+  if (mf) { try { manifest = JSON.parse(await mf.text()); } catch (e) {} }
+
+  const wanted = blobKeysOf(data);
+  if (!confirm(`Replace the current project with “${data.name || 'imported'}”?`
+    + (wanted.size ? `\n\n${plural(wanted.size, 'image')} will be restored from the archive.` : ''))) return;
+
+  /* Where each key's bytes live: the manifest is authoritative, and the
+     file names are a fallback so a hand-edited archive still restores. */
+  const byKey = new Map();
+  zip.names().forEach(n => {
+    const m = /^images\/([^/]+?)(?:\.([^./]*))?$/.exec(n);
+    if (m) byKey.set(m[1], { file: n, type: EXT_MIME[(m[2] || '').toLowerCase()] || '' });
+  });
+  if (manifest && Array.isArray(manifest.images))
+    manifest.images.forEach(i => { if (i && i.key && i.file) byKey.set(i.key, i); });
+
+  /* Blobs first. If this throws, the loaded project is still untouched. */
+  let restored = 0, absent = 0;
+  for (const key of wanted) {
+    const rec = byKey.get(key);
+    const blob = rec ? await zip.get(rec.file) : null;
+    if (!blob) { absent++; continue; }
+    await Store.put('blobs', key, rec.type ? new Blob([blob], { type: rec.type }) : blob);
+    restored++;
+  }
+
+  snapshot();
+  adoptProject(data);
+  await save();
+  await loadImages();
+  render();
+  /* Whatever the old project referenced is unreachable now. Best effort:
+     a storage engine that cannot enumerate must not fail the import. */
+  try {
+    const keep = blobKeysOf(state.project);
+    for (const k of await Store.keys('blobs')) if (!keep.has(k)) await Store.del('blobs', k);
+  } catch (e) {}
+  toast(`Restored “${data.name || 'project'}” · ${plural(restored, 'image')}`
+    + (absent ? ` · ${plural(absent, 'image')} not in the archive` : ''));
+}
+
+async function importProjectJSON(file) {
+  const data = JSON.parse(await file.text());
+  if (!data.panels || !data.breakers) throw new Error('that is not a Circuit Legend file');
+  const wanted = blobKeysOf(data).size;
+  if (!confirm(`Replace the current project with “${data.name || 'imported'}”?`
+    + (wanted ? `\n\nThis file carries no images. ${plural(wanted, 'image')} will be blank unless they are already on this device.` : ''))) return;
+  snapshot();
+  adoptProject(data);
+  await save();
+  await loadImages();
+  render();
+  toast('Project imported' + (wanted ? ` · ${plural(wanted, 'image')} not in this file` : ''));
+}
+
+/* One entry point for both. The kind is sniffed from the file's own bytes
+   rather than its extension, which is the part users rename. */
+function importProject() {
+  const inp = el('input', {
+    type: 'file', accept: '.zip,.json,application/zip,application/json', style: 'display:none',
+    onchange: async e => {
+      const f = e.target.files[0]; if (!f) return;
       try {
-        const data = JSON.parse(rd.result);
-        if (!data.panels || !data.breakers) throw new Error('Not a Circuit Legend file');
-        if (!confirm('Replace the current project with “' + (data.name || 'imported') + '”?')) return;
-        snapshot(); state.project = data; state.panelId = data.panels[0].id; state.floorId = null;
-        state.planFitted = false; touch(); loadImages().then(render);
-        toast('Project imported');
-      } catch (err) { alert('That file could not be read: ' + err.message); }
-    };
-    rd.readAsText(f);
-  } });
+        const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+        const isZip = head[0] === 0x50 && head[1] === 0x4b && (head[2] === 0x03 || head[2] === 0x05 || head[2] === 0x07);
+        if (isZip) await importBackupFile(f);
+        else await importProjectJSON(f);
+      } catch (err) { alert('That file could not be read: ' + (err && err.message ? err.message : err)); }
+    }
+  });
   document.body.appendChild(inp); inp.click(); inp.remove();
 }
 
@@ -2262,9 +2532,10 @@ function openMenu() {
     b.innerHTML = `${label}<div style="font:11px var(--ui);text-transform:none;letter-spacing:0;color:var(--steel-400);margin-top:3px">${hint}</div>`;
     return b;
   };
-  sh.appendChild(mk('Export JSON', 'Full-fidelity backup. Re-importable.', exportJSON));
+  sh.appendChild(mk('Export backup (.zip)', 'Everything: project data and every image. The one to keep.', exportBackup));
+  sh.appendChild(mk('Export JSON', 'Project data only — small and diffable, no images.', exportJSON));
   sh.appendChild(mk('Export CSV', 'Flat circuit list for spreadsheets.', exportCSV));
-  sh.appendChild(mk('Import JSON', 'Replace this project from a backup file.', importJSON));
+  sh.appendChild(mk('Import backup or JSON', 'Replace this project from a .zip backup or a .json file.', importProject));
   sh.appendChild(mk('Print panel directory', 'The card that goes inside the panel door.', () => printDirectory(panelById(state.panelId) || P().panels[0])));
   sh.appendChild(mk('Print full report', 'Cover sheet, schedules, rooms and checks.', printFullReport));
   sh.appendChild(mk('Start a new project', 'Clears everything currently loaded.', () => {
@@ -2424,7 +2695,12 @@ function render() {
   renderSide();
   restoreFocus(focus);
 }
+/* Rebuilds every floor's object URL from scratch. Importing replaces the
+   whole floor list, so the old URLs are revoked first — otherwise they
+   leak, and a reused floor id would keep showing the previous image. */
 async function loadImages() {
+  Object.values(state.imgURL).forEach(u => { try { URL.revokeObjectURL(u); } catch (e) {} });
+  state.imgURL = {};
   for (const f of P().floors) {
     if (!f.imgKey) continue;
     try { const b = await Store.get('blobs', f.imgKey); if (b) state.imgURL[f.id] = URL.createObjectURL(b); } catch (e) {}

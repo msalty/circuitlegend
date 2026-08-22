@@ -44,9 +44,36 @@ disabled on `file://`.
 - Project data: IndexedDB, store `kv`, key `project`
 - Floor plan images and photos: IndexedDB, store `blobs`
 
-Nothing leaves the device. **Export JSON regularly** — clearing browser data
-removes the project. JSON export is full fidelity and re-importable; images are
-not embedded, so keep the originals.
+Nothing leaves the device. **Export a backup regularly** — clearing browser data
+removes the project and every image with it.
+
+## Backups
+
+**Export backup (.zip)** is the full-fidelity save: the complete project record
+plus every floor plan image and photo, in one file that restores the lot.
+
+```
+project.json              the whole project record
+manifest.json             what was exported, and which file holds which image
+images/<key>.<ext>        one file per stored image, original bytes untouched
+```
+
+It is an ordinary zip — open it in any file manager and the images are right
+there, browsable, in their original format. Nothing in the app depends on a zip
+library; entries are stored uncompressed, which images already are.
+
+**Import backup or JSON** takes either. The kind is decided by the file's own
+first bytes rather than its extension, so a backup that got renamed still
+restores. Images are written to storage *before* the project is swapped in, so a
+failed import leaves what you have loaded untouched; once it succeeds, images the
+old project referenced and the new one does not are cleaned up. Archives that
+were re-zipped with compression are read too, where the browser supports it.
+
+**Export JSON** remains the small, diffable, images-excluded option — useful for
+version control or a quick diff, not as your only backup. It says how many images
+it is leaving out, and importing one warns you the same way.
+
+Everything runs in the browser: no upload, no service, no network.
 
 ## Layout
 
