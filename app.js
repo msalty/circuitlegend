@@ -1715,22 +1715,6 @@ function sideBreaker(side, b) {
     body.appendChild(field('Breaker colour', sw));
   }));
 
-  /* moving happens once, when the panel is rebuilt — folded away too */
-  side.appendChild(disclose('move', 'Move or swap', body => {
-    const targets = moveTargets(b);
-    const msel = el('select', { class: 'i', disabled: targets.length ? null : 'disabled',
-      onchange: e => { if (e.target.value) moveBreaker(b, +e.target.value); } });
-    msel.appendChild(el('option', { value: '' },
-      [locked ? '— locked —' : targets.length ? '— move to slot —' : '— nowhere to move —']));
-    targets.forEach(([v, n]) => msel.appendChild(el('option', { value: v }, [n])));
-    body.appendChild(field('Move to slot', msel));
-    body.appendChild(el('button', { class: 'iconbtn', style: 'width:100%', disabled: targets.length ? null : 'disabled',
-      onclick: () => startMoving(b.id) }, ['Pick a space on the ladder']));
-    body.appendChild(el('div', { class: 'hint', style: 'margin-top:8px' }, [locked
-      ? 'Unlock this breaker to move it.'
-      : 'The rating, wire, notes and every device on this breaker travel with it. Landing on an occupied space swaps the two.']));
-  }, { pill: 'slot ' + b.slot }));
-
   /* ---------- tier 2: the circuit(s) this breaker feeds ----------
      Indented under the breaker, with the devices nested one step further,
      so breaker > circuit > device is visible rather than implied.  */
@@ -1801,7 +1785,7 @@ function sideBreaker(side, b) {
       dsel.appendChild(el('option', { value: '' }, [ds.length ? (locked ? '— locked —' : '— move loads to —') : '— nothing on this circuit —']));
       dests.forEach(([v, n]) => dsel.appendChild(el('option', { value: v }, [n])));
       body.appendChild(field('Re-land on', dsel,
-        'Reassigns every device here. For when the wiring changed but the breaker stayed put — to move the breaker itself, use Move or swap above.'));
+        'Reassigns every device here. For when the wiring changed but the breaker stayed put — to move the breaker itself, use Move or swap at the bottom.'));
     }, ds.length ? { pill: ds.length + ' dev' } : null));
   });
   side.appendChild(branch);
@@ -1829,6 +1813,23 @@ function sideBreaker(side, b) {
     body.appendChild(inputFor(b, 'notes', { ph: 'Anything worth remembering', live: true }));
     body.appendChild(photoControl(b));
   }, b.notes || b.photoKey ? { pill: 'set', pillCls: 'live' } : null));
+
+  /* Moving happens once, when a panel is rebuilt, so it sits down here with
+     the other things you reach for rarely rather than beside the ratings. */
+  side.appendChild(disclose('move', 'Move or swap', body => {
+    const targets = moveTargets(b);
+    const msel = el('select', { class: 'i', disabled: targets.length ? null : 'disabled',
+      onchange: e => { if (e.target.value) moveBreaker(b, +e.target.value); } });
+    msel.appendChild(el('option', { value: '' },
+      [locked ? '— locked —' : targets.length ? '— move to slot —' : '— nowhere to move —']));
+    targets.forEach(([v, n]) => msel.appendChild(el('option', { value: v }, [n])));
+    body.appendChild(field('Move to slot', msel));
+    body.appendChild(el('button', { class: 'iconbtn', style: 'width:100%', disabled: targets.length ? null : 'disabled',
+      onclick: () => startMoving(b.id) }, ['Pick a space on the ladder']));
+    body.appendChild(el('div', { class: 'hint', style: 'margin-top:8px' }, [locked
+      ? 'Unlock this breaker to move it.'
+      : 'The rating, wire, notes and every device on this breaker travel with it. Landing on an occupied space swaps the two.']));
+  }, { pill: 'slot ' + b.slot }));
 
   side.appendChild(disclose('danger', 'Remove this breaker', body => {
     body.appendChild(el('div', { class: 'hint' }, ['The breaker and its circuits go; the devices survive and become unassigned.']));

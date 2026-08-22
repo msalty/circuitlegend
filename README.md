@@ -121,10 +121,11 @@ stepped in under the one above and given its own accent:
 - **If you switch this off** — the consequence, grouped by room.
 
 Everything you set once and then forget is folded into sections that stay
-closed until you want them: *Configuration* (tandem, HACR, lock, handle tie,
-subpanel, colour), *Move or swap*, *How to name a circuit*, *Move these loads
-elsewhere*, *Notes & photo*, and *Remove this breaker*. Open state is
-remembered while the app is running.
+closed until you want them, ordered by how often you reach for them:
+*Configuration* (tandem, HACR, lock, handle tie, subpanel, colour) under the
+breaker; *How to name a circuit* and *Move these loads elsewhere* under the
+circuit; then *Notes & photo*, *Move or swap* and *Remove this breaker* at the
+bottom. Open state is remembered while the app is running.
 
 ## Moving circuits
 
