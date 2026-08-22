@@ -79,13 +79,61 @@ only what 1A feeds, because the two halves have their own handles and one stayin
 live while the other is off is exactly the situation worth documenting. An A / B
 switch in the details pane moves between them.
 
+## Naming circuits
+
+A directory entry answers one question: switch this off, and what goes dead?
+Name it for the answer, not for the wire. NEC 408.4(A) asks for a "clear,
+evident, and specific" purpose, and specifically rules out descriptions that
+depend on who lives there.
+
+The convention the app suggests, and autocompletes from:
+
+- **Dedicated load** — name the appliance and nothing else. *Dishwasher*,
+  *Range*, *Furnace*, *Well pump*.
+- **One area, one kind** — area then load. *Kitchen — countertop receptacles*,
+  *Bath — lights + fan*.
+- **Spans rooms** — lead with the biggest area, list the strays.
+  *Bed 2, Bed 3 — receptacles*.
+- **Mixed kinds** — say so plainly. *Living — lights + receptacles*.
+- **Genuinely scattered** — name the dominant load and let the device list carry
+  the rest. A circuit you cannot name in a phrase is worth a note.
+
+Rooms belong on the devices, not in the name: the impact panel and the Devices
+tab already group by room, so repeating it in the label only costs you the
+characters. About 24 of them stay readable on the ladder and in the printed
+directory. Avoid anything that goes stale — not a person's name, not "new
+outlet".
+
+Where the name is stored follows the model: a single-circuit breaker keeps it on
+the breaker, a tandem keeps one per half. The inspector shows one **Circuit
+name** field either way, and toggling tandem on or off carries the name across
+rather than dropping it.
+
+## Reading the inspector
+
+The rail follows the model — **breaker › circuit › device** — with each tier
+stepped in under the one above and given its own accent:
+
+- **Breaker** — the hardware in the panel. A spec line to read the rating off,
+  then amps, poles, type, wire and verification.
+- **Circuit** — what it feeds. The name, the connected VA, and nested inside it
+  the devices on that circuit. A tandem shows one half at a time.
+- **If you switch this off** — the consequence, grouped by room.
+
+Everything you set once and then forget is folded into sections that stay
+closed until you want them: *Configuration* (tandem, HACR, lock, handle tie,
+subpanel, colour), *Move or swap*, *How to name a circuit*, *Move these loads
+elsewhere*, *Notes & photo*, and *Remove this breaker*. Open state is
+remembered while the app is running.
+
 ## Moving circuits
 
 A rebuilt panel puts the same circuits on different spaces, so both halves of
 that are editable after the fact.
 
-**Moving a breaker** — the *Position* card in a breaker's details. Pick a slot
-from the list, or press **Pick a space on the ladder** and tap the destination.
+**Moving a breaker** — the *Move or swap* section of a breaker's details. Pick a
+slot from the list, or press **Pick a space on the ladder** and tap the
+destination.
 Everything hangs off the breaker record, so the label, rating, wire, notes,
 photo, handle tie, verification and every circuit and device below it travel
 with it; only the slot number changes. The phase leg is shown next to each
@@ -99,7 +147,7 @@ that would run past the last space or would not fit back into the slots you
 left, or either breaker being locked. The ladder greys out every space that
 would fail and tells you why if you tap one.
 
-**Moving loads** — *Move loads to another circuit*, in the circuit card. This
+**Moving loads** — *Move these loads elsewhere*, under the circuit. This
 reassigns every device on the circuit to another circuit anywhere in the
 project, for when the breaker stayed put but the wiring under it was re-landed.
 Locked devices are left behind and the count is reported.

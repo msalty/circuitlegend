@@ -96,6 +96,20 @@ const DEVICE_KINDS = [
   { k: 'panel',     n: 'Subpanel',     w: 0 },
   { k: 'other',     n: 'Other',        w: 0 }
 ];
+/* Conventional circuit names, offered as autocomplete on the name field.
+   Dedicated loads are named for the appliance; shared circuits are named
+   "Area — what it feeds", because the question a directory answers is
+   "if I switch this off, what goes dead?". */
+const CIRCUIT_NAMES = [
+  'Range', 'Cooktop', 'Wall oven', 'Dishwasher', 'Garbage disposal', 'Microwave', 'Refrigerator',
+  'Clothes washer', 'Clothes dryer', 'Water heater', 'Furnace', 'Air handler', 'A/C condenser',
+  'Heat pump', 'Well pump', 'Sump pump', 'Garage door opener', 'EV charger', 'Hot tub', 'Pool pump',
+  'Kitchen — countertop receptacles', 'Kitchen — lights', 'Dining — receptacles',
+  'Bathroom — receptacles', 'Bathroom — lights + fan', 'Bedrooms — receptacles', 'Bedrooms — lights',
+  'Living — receptacles', 'Living — lights', 'Hall, stairs — lights', 'Laundry — receptacles',
+  'Garage — receptacles', 'Basement — lights', 'Attic — lights', 'Outdoor — receptacles',
+  'Outdoor — lights', 'Smoke alarms', 'Doorbell / low voltage'
+];
 const ROOM_TYPES = ['Kitchen', 'Bathroom', 'Bedroom', 'Living', 'Dining', 'Family', 'Office', 'Hallway', 'Closet',
   'Laundry', 'Garage', 'Basement', 'Attic', 'Crawlspace', 'Outdoor', 'Utility', 'Stairs', 'Other'];
 /* Advisory expectations. Jurisdictions and code cycles vary. */
@@ -252,6 +266,9 @@ const state = {
   devSelected: new Set(),
   imgURL: {},           // floorId -> objectURL
   moving: null,         // breakerId being relocated on the ladder
+  /* Which inspector sections are expanded. Kept here rather than on the
+     DOM because render() rebuilds the rail on every keystroke. */
+  disc: { config: false, move: false, naming: false, reland: false, notes: false, danger: false },
   undo: [], wake: null, sideOpen: false
 };
 
@@ -1462,6 +1479,31 @@ function field(label, control, hint) {
   if (hint) w.appendChild(el('div', { class: 'hint', style: 'margin-top:4px' }, [hint]));
   return w;
 }
+/* A section that stays folded until it is wanted. The inspector was one
+   flat stack of equally loud cards; most of what is in it — configuration,
+   moves, notes, deletion — is touched once and then never again. */
+function disclose(key, title, build, opts) {
+  opts = opts || {};
+  const d = el('details', { class: 'disc' + (opts.danger ? ' danger' : ''), open: state.disc[key] ? 'open' : null });
+  const s = el('summary', {}, [title]);
+  if (opts.pill) s.appendChild(el('span', { class: 'pill ' + (opts.pillCls || '') }, [opts.pill]));
+  d.appendChild(s);
+  d.addEventListener('toggle', () => { state.disc[key] = d.open; });
+  const body = el('div', { class: 'discbody' });
+  build(body);
+  d.appendChild(body);
+  return d;
+}
+/* One datalist shared by every circuit-name field. */
+function circuitNameList() {
+  let dl = $('#circuitnames');
+  if (!dl) {
+    dl = el('datalist', { id: 'circuitnames' });
+    CIRCUIT_NAMES.forEach(n => dl.appendChild(el('option', { value: n })));
+    document.body.appendChild(dl);
+  }
+  return 'circuitnames';
+}
 const fidOf = (obj, key) => (obj && obj.id ? obj.id : 'g') + ':' + key;
 function inputFor(obj, key, opts) {
   opts = opts || {};
@@ -1472,7 +1514,7 @@ function inputFor(obj, key, opts) {
      reversed. Text inputs also avoid the spinner and scroll-wheel surprises. */
   const c = el('input', {
     class: 'i', type: 'text', value: obj[key] == null ? '' : obj[key],
-    inputmode: num ? 'decimal' : null, autocomplete: 'off',
+    inputmode: num ? 'decimal' : null, autocomplete: 'off', list: opts.list || null,
     'data-fid': opts.fid || fidOf(obj, key),
     placeholder: opts.ph || '', disabled: opts.disabled ? 'disabled' : null,
     oninput: e => {
@@ -1590,10 +1632,27 @@ function sideBreaker(side, b) {
   if (!b) return sideOverview(side);
   const pan = panelById(b.panelId);
   const locked = !!b.locked;
+  const cs = circuitsOf(b.id);
+  const active = cs.find(c => c.id === state.sel.circuit) || cs[0];
+  const isTandem = cs.length > 1;
+  const slots = slotsFor(b.slot, b.poles).join('/');
 
-  const head = el('div', { class: 'card' });
-  head.appendChild(el('h3', {}, [`Slot ${slotsFor(b.slot, b.poles).join(' / ')}`, el('span', { class: 'pill ' + (b.verify === 'verified' ? 'ok' : b.verify === 'suspect' ? 'bad' : '') }, [b.verify])]));
-  head.appendChild(field('Custom label', inputFor(b, 'label', { ph: 'Kitchen counter receptacles', live: true, disabled: locked, rerender: true })));
+  /* ---------- tier 1: the breaker — the hardware in the panel ----------
+     Ratings only. Everything about what it feeds lives one tier down, and
+     everything you set once and forget is folded away below.            */
+  const head = el('div', { class: 'card tier-brk' });
+  head.appendChild(el('h3', {}, [`Breaker · slot ${slots}`,
+    el('span', { class: 'pill ' + (b.verify === 'verified' ? 'ok' : b.verify === 'suspect' ? 'bad' : '') }, [b.verify])]));
+  /* One line to read the rating off, instead of piecing it together from
+     four selects. It also surfaces the folded-away settings that matter. */
+  head.appendChild(el('div', { class: 'specline', html: [
+    `<b>${b.amps}A</b>`, b.poles > 1 ? `<b>${b.poles}-pole</b>` : '1-pole', esc(b.type),
+    '#' + esc(b.wire), 'leg ' + legOf(pan, b.slot),
+    b.hacr ? 'HACR' : null, b.tandem ? 'tandem' : null,
+    b.tieId ? 'handle tie' : null,
+    b.subpanelId ? '&rarr; ' + esc(panelById(b.subpanelId).name) : null,
+    locked ? '<b>&#9887; locked</b>' : null
+  ].filter(Boolean).join(' &middot; ') }));
   const r1 = el('div', { class: 'row' });
   r1.appendChild(field('Amps', selectFor(b, 'amps', AMP_CHOICES, { number: true, disabled: locked })));
   r1.appendChild(field('Poles', selectFor(b, 'poles', [[1, '1 — single'], [2, '2 — linked (next slot)'], [3, '3 — linked ×3']], {
@@ -1613,9 +1672,6 @@ function sideBreaker(side, b) {
     }
   })));
   head.appendChild(r1);
-  head.appendChild(el('div', { class: 'hint' }, [b.poles > 1
-    ? `Common trip. Occupies slots ${slotsFor(b.slot, b.poles).join(', ')} — one circuit at ${P().settings.voltage2} V.`
-    : 'Single pole. Use “Handle tie” below to join non-consecutive breakers instead.']));
   const r2 = el('div', { class: 'row' });
   r2.appendChild(field('Type', selectFor(b, 'type', BREAKER_TYPES, { disabled: locked })));
   r2.appendChild(field('Wire size', selectFor(b, 'wire', WIRE_SIZES, { disabled: locked })));
@@ -1623,67 +1679,67 @@ function sideBreaker(side, b) {
   head.appendChild(field('Verification', selectFor(b, 'verify', VERIFY)));
   side.appendChild(head);
 
-  /* position — a rebuilt panel puts the same circuits on new spaces */
-  const pos = el('div', { class: 'card' });
-  pos.appendChild(el('h3', {}, ['Position', el('span', { class: 'pill' }, ['leg ' + legOf(pan, b.slot)])]));
-  const targets = moveTargets(b);
-  const msel = el('select', { class: 'i', disabled: targets.length ? null : 'disabled', onchange: e => { if (e.target.value) moveBreaker(b, +e.target.value); } });
-  msel.appendChild(el('option', { value: '' },
-    [locked ? '— locked —' : targets.length ? '— move to slot —' : '— nowhere to move —']));
-  targets.forEach(([v, n]) => msel.appendChild(el('option', { value: v }, [n])));
-  pos.appendChild(field('Move to slot', msel));
-  pos.appendChild(el('button', { class: 'iconbtn', style: 'width:100%', disabled: targets.length ? null : 'disabled',
-    onclick: () => startMoving(b.id) }, ['Pick a space on the ladder']));
-  pos.appendChild(el('div', { class: 'hint' }, [locked
-    ? 'Unlock this breaker to move it.'
-    : 'The label, rating, wire, notes and every device on this breaker travel with it. Landing on an occupied space swaps the two breakers.']));
-  side.appendChild(pos);
-
-  /* toggles */
-  const tg = el('div', { class: 'card' });
-  tg.appendChild(el('h3', {}, ['Configuration']));
-  tg.appendChild(checkFor(b, 'tandem', 'Tandem — split into A and B', {
-    disabled: locked || b.poles > 1,
-    after: () => syncCircuits(b)
-  }));
-  tg.appendChild(checkFor(b, 'hacr', 'HACR rated', { disabled: locked }));
-  tg.appendChild(checkFor(b, 'locked', 'Locked — block accidental edits'));
-  /* handle tie */
-  const tieOpts = breakersOf(pan.id).filter(x => x.id !== b.id).map(x => [x.id, `Slot ${slotsFor(x.slot, x.poles).join('/')} — ${x.label || x.amps + 'A'}`]);
-  const tieSel = el('select', { class: 'i', disabled: locked ? 'disabled' : null, onchange: e => {
-    snapshot();
-    if (!e.target.value) { b.tieId = null; }
-    else { const other = breakerById(e.target.value); const gid = b.tieId || other.tieId || uid('tie'); b.tieId = gid; other.tieId = gid; }
-    touch(); render();
-  } });
-  tieSel.appendChild(el('option', { value: '' }, [b.tieId ? '— remove from tie —' : '— none —']));
-  tieOpts.forEach(([v, n]) => tieSel.appendChild(el('option', { value: v }, [n])));
-  tg.appendChild(field('Bridged handle tie', tieSel,
-    b.tieId ? 'Tied with ' + (tiedWith(b).map(x => 'slot ' + x.slot).join(', ') || 'nothing yet') + '. Independent circuits, one handle.'
-            : 'Joins two breakers mechanically. They switch together but stay separate circuits.'));
-  /* subpanel */
-  const subOpts = P().panels.filter(x => x.id !== pan.id).map(x => [x.id, x.name]);
-  tg.appendChild(field('Feeds subpanel', selectFor(b, 'subpanelId', subOpts, { blank: '— none —', disabled: locked }),
-    b.subpanelId ? 'Turning this off de-energizes everything in ' + panelById(b.subpanelId).name + '.' : ''));
-  /* colour */
-  const sw = el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' });
-  BREAKER_COLORS.forEach(col => {
-    sw.appendChild(el('button', {
-      title: col || 'default', disabled: locked ? 'disabled' : null,
-      style: `width:28px;height:24px;border-radius:2px;border:2px solid ${b.color === col ? 'var(--live)' : 'transparent'};background:${col || 'var(--steel-700)'}`,
-      onclick: () => { snapshot(); b.color = col; touch(); render(); }
+  /* configuration — set once per breaker, so it stays folded */
+  side.appendChild(disclose('config', 'Configuration', body => {
+    body.appendChild(checkFor(b, 'tandem', 'Tandem — split into A and B', {
+      disabled: locked || b.poles > 1, after: () => syncCircuits(b)
     }));
-  });
-  tg.appendChild(field('Breaker colour', sw));
-  side.appendChild(tg);
+    body.appendChild(checkFor(b, 'hacr', 'HACR rated', { disabled: locked }));
+    body.appendChild(checkFor(b, 'locked', 'Locked — block accidental edits'));
+    body.appendChild(el('div', { class: 'hint', style: 'margin-top:6px' }, [b.poles > 1
+      ? `Common trip: slots ${slotsFor(b.slot, b.poles).join(', ')} are one circuit at ${P().settings.voltage2} V.`
+      : 'Single pole. A handle tie joins non-consecutive breakers instead.']));
+    const tieOpts = breakersOf(pan.id).filter(x => x.id !== b.id).map(x => [x.id, `Slot ${slotsFor(x.slot, x.poles).join('/')} — ${x.label || x.amps + 'A'}`]);
+    const tieSel = el('select', { class: 'i', disabled: locked ? 'disabled' : null, onchange: e => {
+      snapshot();
+      if (!e.target.value) { b.tieId = null; }
+      else { const other = breakerById(e.target.value); const gid = b.tieId || other.tieId || uid('tie'); b.tieId = gid; other.tieId = gid; }
+      touch(); render();
+    } });
+    tieSel.appendChild(el('option', { value: '' }, [b.tieId ? '— remove from tie —' : '— none —']));
+    tieOpts.forEach(([v, n]) => tieSel.appendChild(el('option', { value: v }, [n])));
+    body.appendChild(field('Bridged handle tie', tieSel,
+      b.tieId ? 'Tied with ' + (tiedWith(b).map(x => 'slot ' + x.slot).join(', ') || 'nothing yet') + '. Independent circuits, one handle.'
+              : 'Joins two breakers mechanically. They switch together but stay separate circuits.'));
+    const subOpts = P().panels.filter(x => x.id !== pan.id).map(x => [x.id, x.name]);
+    body.appendChild(field('Feeds subpanel', selectFor(b, 'subpanelId', subOpts, { blank: '— none —', disabled: locked }),
+      b.subpanelId ? 'Turning this off de-energizes everything in ' + panelById(b.subpanelId).name + '.' : ''));
+    const sw = el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' });
+    BREAKER_COLORS.forEach(col => {
+      sw.appendChild(el('button', {
+        title: col || 'default', disabled: locked ? 'disabled' : null,
+        style: `width:28px;height:24px;border-radius:2px;border:2px solid ${b.color === col ? 'var(--live)' : 'transparent'};background:${col || 'var(--steel-700)'}`,
+        onclick: () => { snapshot(); b.color = col; touch(); render(); }
+      }));
+    });
+    body.appendChild(field('Breaker colour', sw));
+  }));
 
-  /* circuits + devices — a tandem shows one half at a time */
-  const cs = circuitsOf(b.id);
-  const active = cs.find(c => c.id === state.sel.circuit) || cs[0];
-  (cs.length > 1 ? [active] : cs).forEach(c => {
-    const cc = el('div', { class: 'card' });
-    cc.appendChild(el('h3', {}, [cs.length > 1 ? `Circuit ${b.slot}${c.sub}` : 'Circuit', el('span', { class: 'pill' }, [circuitVA(c.id) + ' VA'])]));
-    if (cs.length > 1) {
+  /* moving happens once, when the panel is rebuilt — folded away too */
+  side.appendChild(disclose('move', 'Move or swap', body => {
+    const targets = moveTargets(b);
+    const msel = el('select', { class: 'i', disabled: targets.length ? null : 'disabled',
+      onchange: e => { if (e.target.value) moveBreaker(b, +e.target.value); } });
+    msel.appendChild(el('option', { value: '' },
+      [locked ? '— locked —' : targets.length ? '— move to slot —' : '— nowhere to move —']));
+    targets.forEach(([v, n]) => msel.appendChild(el('option', { value: v }, [n])));
+    body.appendChild(field('Move to slot', msel));
+    body.appendChild(el('button', { class: 'iconbtn', style: 'width:100%', disabled: targets.length ? null : 'disabled',
+      onclick: () => startMoving(b.id) }, ['Pick a space on the ladder']));
+    body.appendChild(el('div', { class: 'hint', style: 'margin-top:8px' }, [locked
+      ? 'Unlock this breaker to move it.'
+      : 'The rating, wire, notes and every device on this breaker travel with it. Landing on an occupied space swaps the two.']));
+  }, { pill: 'slot ' + b.slot }));
+
+  /* ---------- tier 2: the circuit(s) this breaker feeds ----------
+     Indented under the breaker, with the devices nested one step further,
+     so breaker > circuit > device is visible rather than implied.  */
+  const branch = el('div', { class: 'branch' });
+  (isTandem ? [active] : cs).forEach(c => {
+    const cc = el('div', { class: 'card tier-cir' });
+    cc.appendChild(el('h3', {}, [`Circuit ${b.slot}${c.sub || ''}`,
+      el('span', { class: 'pill' }, [circuitVA(c.id) + ' VA'])]));
+    if (isTandem) {
       const seg = el('div', { class: 'seg' });
       cs.forEach(x => seg.appendChild(el('button', {
         class: x.id === c.id ? 'on' : '',
@@ -1691,8 +1747,21 @@ function sideBreaker(side, b) {
       }, [`${b.slot}${x.sub}${x.label ? ' · ' + trunc(x.label, 14) : ''}`])));
       cc.appendChild(seg);
     }
-    if (cs.length > 1) cc.appendChild(field('Circuit label', inputFor(c, 'label', { ph: 'Hall lights', live: true, disabled: locked, rerender: true })));
+    /* Exactly one name per circuit, in one place. On a single-circuit
+       breaker that name is stored on the breaker — which is what the ladder
+       and the printed directory read — so the field edits it directly
+       rather than adding a second box that means almost the same thing. */
+    cc.appendChild(field('Circuit name',
+      inputFor(isTandem ? c : b, 'label', {
+        ph: isTandem ? 'Hall — lights' : 'Kitchen — countertop receptacles',
+        list: circuitNameList(), live: true, disabled: locked, rerender: true
+      }),
+      'Area — what it feeds. About 24 characters stays readable on the ladder and in the printed directory.'));
+
+    /* ---------- tier 3: the devices on this circuit ---------- */
     const ds = devicesOf(c.id);
+    const sub = el('div', { class: 'subtier' });
+    sub.appendChild(el('h4', {}, [ds.length ? `${ds.length} device${ds.length === 1 ? '' : 's'}` : 'Devices']));
     const ul = el('ul', { class: 'list' });
     ds.forEach(d => {
       const rm = roomById(d.roomId), fl = floorById(d.floorId);
@@ -1701,31 +1770,47 @@ function sideBreaker(side, b) {
       li.appendChild(el('div', { style: 'flex:1', html: `${esc(d.label || DEVICE_KINDS.find(k => k.k === d.kind).n)}<div class="sub">${esc(rm ? rm.name : 'no room')} · ${esc(fl ? fl.name : 'no floor')}${d.watts ? ' · ' + d.watts + ' VA' : ''}</div>` }));
       ul.appendChild(li);
     });
-    if (!ds.length) cc.appendChild(el('div', { class: 'empty' }, ['Nothing on this circuit yet.']));
-    cc.appendChild(ul);
-    cc.appendChild(el('button', { class: 'iconbtn', style: 'width:100%;margin-top:8px', onclick: () => startPlacing(c.id) }, ['+ Add device on plan']));
-    /* Re-landing: the breaker stays where it is, the loads under it change. */
-    const dests = [];
-    P().panels.forEach(pp => breakersOf(pp.id).forEach(x => circuitsOf(x.id).forEach(xc => {
-      if (xc.id === c.id) return;
-      dests.push([xc.id, `${pp.name} · ${x.slot}${xc.sub || ''}${x.label ? ' — ' + trunc(x.label, 18) : ''}`]);
-    })));
-    const canReland = !locked && ds.length && dests.length;
-    const dsel = el('select', { class: 'i', disabled: canReland ? null : 'disabled',
-      onchange: e => { if (e.target.value) moveCircuitLoads(c, e.target.value); } });
-    dsel.appendChild(el('option', { value: '' }, [ds.length ? (locked ? '— locked —' : '— move loads to —') : '— nothing on this circuit —']));
-    dests.forEach(([v, n]) => dsel.appendChild(el('option', { value: v }, [n])));
-    cc.appendChild(field('Move loads to another circuit', dsel,
-      'Reassigns every device here. Use this when the wiring was re-landed but the breaker stayed put — to move the breaker itself, use Position above.'));
-    side.appendChild(cc);
+    if (!ds.length) sub.appendChild(el('div', { class: 'empty' }, ['Nothing on this circuit yet.']));
+    sub.appendChild(ul);
+    sub.appendChild(el('button', { class: 'iconbtn', style: 'width:100%;margin-top:8px', onclick: () => startPlacing(c.id) }, ['+ Add device on plan']));
+    cc.appendChild(sub);
+    branch.appendChild(cc);
+
+    /* naming guidance, in the tool rather than in the manual */
+    branch.appendChild(disclose('naming', 'How to name a circuit', body => {
+      body.appendChild(el('div', { class: 'hint' }, ['A directory entry answers one question: switch this off, and what goes dead? Name it for the answer.']));
+      const rule = (t, d) => body.appendChild(el('div', { class: 'rule', html: `<b>${t}</b>${esc(d)}` }));
+      rule('Dedicated load', 'Name the appliance, nothing else — Dishwasher, Range, Furnace, Well pump.');
+      rule('One area, one kind', 'Area then load — “Kitchen — countertop receptacles”, “Bath — lights + fan”.');
+      rule('Spans rooms', 'Lead with the biggest area, list the strays — “Bed 2, Bed 3 — receptacles”.');
+      rule('Mixed kinds', 'Say so plainly — “Living — lights + receptacles”.');
+      rule('Genuinely scattered', 'Name the dominant load and let the device list carry the rest. A circuit you cannot name in a phrase is worth a note.');
+      body.appendChild(el('div', { class: 'hint' }, ['Rooms belong on the devices, not in the name — the impact panel and the Devices tab group by room for you. Avoid anything that goes stale: not a person’s name, not “new outlet”.']));
+    }));
+
+    /* re-landing loads: rare, so folded, and it sits with the circuit it acts on */
+    branch.appendChild(disclose('reland', 'Move these loads elsewhere', body => {
+      const dests = [];
+      P().panels.forEach(pp => breakersOf(pp.id).forEach(x => circuitsOf(x.id).forEach(xc => {
+        if (xc.id === c.id) return;
+        dests.push([xc.id, `${pp.name} · ${x.slot}${xc.sub || ''}${x.label ? ' — ' + trunc(x.label, 18) : ''}`]);
+      })));
+      const can = !locked && ds.length && dests.length;
+      const dsel = el('select', { class: 'i', disabled: can ? null : 'disabled',
+        onchange: e => { if (e.target.value) moveCircuitLoads(c, e.target.value); } });
+      dsel.appendChild(el('option', { value: '' }, [ds.length ? (locked ? '— locked —' : '— move loads to —') : '— nothing on this circuit —']));
+      dests.forEach(([v, n]) => dsel.appendChild(el('option', { value: v }, [n])));
+      body.appendChild(field('Re-land on', dsel,
+        'Reassigns every device here. For when the wiring changed but the breaker stayed put — to move the breaker itself, use Move or swap above.'));
+    }, ds.length ? { pill: ds.length + ' dev' } : null));
   });
+  side.appendChild(branch);
 
   /* impact — scoped to the chosen half when this is a tandem */
-  const isTandemHalf = cs.length > 1;
   const affB = affectedBreakers(b);
-  const affD = isTandemHalf ? devicesOf(active.id) : affectedDevices(b);
-  const im = el('div', { class: 'card' });
-  im.appendChild(el('h3', {}, [isTandemHalf ? `If you switch off ${b.slot}${active.sub}` : 'If you switch this off']));
+  const affD = isTandem ? devicesOf(active.id) : affectedDevices(b);
+  const im = el('div', { class: 'card tier-imp' });
+  im.appendChild(el('h3', {}, [isTandem ? `If you switch off ${b.slot}${active.sub}` : 'If you switch this off']));
   const crit = affD.filter(d => d.critical);
   if (crit.length) im.appendChild(el('div', { style: 'background:#3a1c17;border:1px solid var(--bad);border-radius:2px;padding:8px;margin-bottom:9px;font-size:12px',
     html: `<strong style="color:var(--bad)">Critical loads affected:</strong><br>${crit.map(d => esc(d.label || d.kind)).join(', ')}` }));
@@ -1735,36 +1820,47 @@ function sideBreaker(side, b) {
   if (!keys.length) im.appendChild(el('div', { class: 'empty' }, ['Nothing mapped to this breaker yet. Discovery mode is the fastest way to find out what it feeds.']));
   keys.forEach(k => im.appendChild(el('div', { style: 'font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--steel-800)',
     html: `<strong>${esc(k)}</strong> <span style="color:var(--steel-400)">— ${byRoom[k].map(d => esc(d.label || DEVICE_KINDS.find(x => x.k === d.kind).n)).join(', ')}</span>` })));
-  if (isTandemHalf) im.appendChild(el('div', { class: 'hint', style: 'margin-top:8px' },
+  if (isTandem) im.appendChild(el('div', { class: 'hint', style: 'margin-top:8px' },
     [`Tandem: ${b.slot}${cs.find(c => c.id !== active.id).sub} has its own handle and stays live.`]));
   else if (affB.length > 1) im.appendChild(el('div', { class: 'hint', style: 'margin-top:8px' }, [`Also drops ${affB.length - 1} other breaker${affB.length > 2 ? 's' : ''} (handle tie or subpanel).`]));
   side.appendChild(im);
 
-  /* notes + photo + delete */
-  const nt = el('div', { class: 'card' });
-  nt.appendChild(el('h3', {}, ['Notes & photo']));
-  nt.appendChild(inputFor(b, 'notes', { ph: 'Anything worth remembering', live: true }));
-  nt.appendChild(photoControl(b));
-  nt.appendChild(el('button', { class: 'iconbtn', style: 'width:100%;margin-top:10px;border-color:var(--bad);color:var(--bad)', disabled: locked ? 'disabled' : null,
-    onclick: () => { if (!confirm('Remove this breaker and its circuits? Devices become unassigned.')) return;
-      edit(() => {
-        circuitsOf(b.id).forEach(c => P().devices.forEach(d => { if (d.circuitId === c.id) d.circuitId = null; }));
-        P().circuits = P().circuits.filter(c => c.breakerId !== b.id);
-        P().breakers = P().breakers.filter(x => x.id !== b.id);
-        state.sel = { breaker: null, circuit: null, device: null, room: null };
-      }); render(); } }, ['Remove breaker']));
-  side.appendChild(nt);
+  side.appendChild(disclose('notes', 'Notes & photo', body => {
+    body.appendChild(inputFor(b, 'notes', { ph: 'Anything worth remembering', live: true }));
+    body.appendChild(photoControl(b));
+  }, b.notes || b.photoKey ? { pill: 'set', pillCls: 'live' } : null));
+
+  side.appendChild(disclose('danger', 'Remove this breaker', body => {
+    body.appendChild(el('div', { class: 'hint' }, ['The breaker and its circuits go; the devices survive and become unassigned.']));
+    body.appendChild(el('button', { class: 'iconbtn', style: 'width:100%;border-color:var(--bad);color:var(--bad)', disabled: locked ? 'disabled' : null,
+      onclick: () => { if (!confirm('Remove this breaker and its circuits? Devices become unassigned.')) return;
+        edit(() => {
+          circuitsOf(b.id).forEach(c => P().devices.forEach(d => { if (d.circuitId === c.id) d.circuitId = null; }));
+          P().circuits = P().circuits.filter(c => c.breakerId !== b.id);
+          P().breakers = P().breakers.filter(x => x.id !== b.id);
+          state.sel = { breaker: null, circuit: null, device: null, room: null };
+        }); render(); } }, ['Remove breaker']));
+  }, { danger: true }));
 }
 
+/* The circuit name lives on the breaker while there is one circuit and on
+   the circuits once it splits — that is what the ladder and the printed
+   directory read in each case. Carry it across the toggle so a name never
+   disappears just because a breaker became (or stopped being) a tandem. */
 function syncCircuits(b) {
   const cs = circuitsOf(b.id);
   if (b.tandem) {
-    if (cs.length === 1) { cs[0].sub = 'A'; P().circuits.push({ id: uid('cir'), breakerId: b.id, sub: 'B', label: '' }); }
+    if (cs.length === 1) {
+      if (!cs[0].label && b.label) cs[0].label = b.label;
+      cs[0].sub = 'A';
+      P().circuits.push({ id: uid('cir'), breakerId: b.id, sub: 'B', label: '' });
+    }
   } else {
     if (cs.length > 1) {
       const keep = cs[0]; keep.sub = null;
       cs.slice(1).forEach(c => { P().devices.forEach(d => { if (d.circuitId === c.id) d.circuitId = keep.id; }); });
       P().circuits = P().circuits.filter(c => c.breakerId !== b.id || c.id === keep.id);
+      if (keep.label) { b.label = keep.label; keep.label = ''; }
     }
   }
 }
