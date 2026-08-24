@@ -168,6 +168,49 @@ const devicesOf   = cid => P().devices.filter(d => d.circuitId === cid);
 const devicesOfBreaker = bid => circuitsOf(bid).flatMap(c => devicesOf(c.id));
 const roomsOfFloor = fid => P().rooms.filter(r => r.floorId === fid);
 
+/* ---------- control links ----------
+   A switch is the one device that makes something else go dead without a
+   breaker moving, so it carries `controls`: the ids of what it operates.
+   The link is stored on the switch only; "what controls this light" is a
+   filter, not a second field to keep in sync. It says nothing about how
+   power gets there — that is still circuit -> breaker -> panel — so it
+   stays out of traceToSource. */
+const controlsOf    = d => (d.controls || []).map(deviceById).filter(Boolean);
+const controllersOf = d => P().devices.filter(x => (x.controls || []).includes(d.id));
+/* Offer the field on switches, and on anything that already has links so
+   changing a device's kind cannot strand data out of sight. */
+const takesControls = d => d.kind === 'switch' || (d.controls || []).length > 0;
+const deviceName = d => d.label || (DEVICE_KINDS.find(k => k.k === d.kind) || {}).n || 'Device';
+/* Two switches on one load is a 3-way; beyond that the names stop being
+   worth arguing about, so say how many places instead. */
+function multiwayNote(target, exclude) {
+  const others = controllersOf(target).filter(x => x.id !== (exclude && exclude.id));
+  if (!others.length) return '';
+  return others.length === 1
+    ? ` · 3-way with ${deviceName(others[0])}`
+    : ` · switched from ${others.length + 1} places`;
+}
+/* The one cross-device edge in the model, and so the one thing a delete
+   has to chase. Everything else hangs off a parent id and cleans up when
+   the parent list is filtered. */
+function dropControlLinks(ids) {
+  const gone = ids instanceof Set ? ids : new Set(ids);
+  P().devices.forEach(d => {
+    if (d.controls && d.controls.some(id => gone.has(id)))
+      d.controls = d.controls.filter(id => !gone.has(id));
+  });
+}
+/* Projects that predate this field simply have none, and every reader
+   tolerates that. What is worth cleaning on the way in is a hand-edited or
+   partial JSON pointing at devices that are not in the file. */
+function pruneControlLinks(p) {
+  const live = new Set((p.devices || []).map(d => d.id));
+  (p.devices || []).forEach(d => {
+    if (!Array.isArray(d.controls)) { if (d.controls != null) delete d.controls; return; }
+    d.controls = Array.from(new Set(d.controls.filter(id => id !== d.id && live.has(id))));
+  });
+}
+
 function breakerAtSlot(panelId, slot) {
   return P().breakers.find(b => b.panelId === panelId && slotsFor(b.slot, b.poles).includes(slot));
 }
@@ -309,7 +352,7 @@ function edit(fn) { snapshot(); fn(); touch(); }
 const ROWH = 34, COLW = 208, BUSW = 48, HEAD = 5;
 
 function highlightSets() {
-  const sel = new Set(), aff = new Set(), devs = new Set();
+  const sel = new Set(), aff = new Set(), devs = new Set(), linked = new Set();
   const s = state.sel;
   if (s.breaker) {
     const b = breakerById(s.breaker);
@@ -332,6 +375,14 @@ function highlightSets() {
       devs.add(d.id);
       const c = circuitById(d.circuitId);
       if (c) sel.add(c.breakerId);
+      /* Control links are kept apart from `devs`: what a switch operates is
+         not thereby on the selected circuit, and saying so in green would be
+         a lie. They only earn the right not to be dimmed. Siblings on a
+         3-way come along — selecting one half of a pair and having the other
+         fade out would hide the half of the answer that matters. */
+      controlsOf(d).forEach(x => { linked.add(x.id); controllersOf(x).forEach(sw => linked.add(sw.id)); });
+      controllersOf(d).forEach(x => linked.add(x.id));
+      linked.delete(d.id);
     }
   }
   if (s.room) {
@@ -341,7 +392,7 @@ function highlightSets() {
       if (c) aff.add(c.breakerId);
     });
   }
-  return { sel, aff, devs };
+  return { sel, aff, devs, linked };
 }
 
 function svgEl(tag, attrs) {
@@ -780,7 +831,7 @@ function renderPlanView() {
 
   const f = currentFloor();
   const below = P().floors.filter(x => x.level < f.level).sort((a, b) => b.level - a.level)[0];
-  const { sel, devs } = highlightSets();
+  const { sel, devs, linked } = highlightSets();
   const anyHighlight = devs.size > 0;
 
   const W = host.clientWidth || 900, H = host.clientHeight || 600;
@@ -812,10 +863,32 @@ function renderPlanView() {
     });
   }
 
+  /* Control links for whatever is selected, under the pins so the glyphs
+     stay readable. Drawn only on selection: every switch in a house wired
+     in at once would be a cobweb, not a drawing. Widths divide by the zoom
+     because the line lives in image coordinates while pins are counter-
+     scaled — without it the hairline fattens as you zoom in. */
+  if (state.sel.device) {
+    const d0 = deviceById(state.sel.device);
+    if (d0) {
+      const pairs = controlsOf(d0).map(t => [d0, t])
+        .concat(controllersOf(d0).map(sw => [sw, d0]));
+      pairs.forEach(([a, b2]) => {
+        if (a.floorId !== f.id || b2.floorId !== f.id) return;   /* cross-floor pairs are named in the inspector instead */
+        g.appendChild(svgEl('line', {
+          x1: a.x, y1: a.y, x2: b2.x, y2: b2.y,
+          stroke: 'var(--live)', 'stroke-width': 1.6 / t.k, opacity: .7,
+          'stroke-dasharray': `${5 / t.k} ${4 / t.k}`, 'stroke-linecap': 'round'
+        }));
+      });
+    }
+  }
+
   /* pins */
   P().devices.filter(d => d.floorId === f.id).forEach(d => {
     const on = devs.has(d.id);
-    const dim = anyHighlight && !on;
+    const tied = linked.has(d.id);
+    const dim = anyHighlight && !on && !tied;
     const pin = svgEl('g', {
       transform: `translate(${d.x},${d.y}) scale(${1 / t.k})`,
       style: 'cursor:pointer', tabindex: 0, role: 'button',
@@ -823,6 +896,9 @@ function renderPlanView() {
       'aria-label': `${d.label || d.kind} in ${roomById(d.roomId) ? roomById(d.roomId).name : 'no room'}`
     });
     if (on) pin.appendChild(svgEl('circle', { r: 17, fill: 'var(--live)', opacity: .22 }));
+    /* The other end of a control link: ringed, not filled — it is related
+       to the selection, not energized by it. */
+    if (tied && !on) pin.appendChild(svgEl('circle', { r: 15, fill: 'none', stroke: 'var(--live)', 'stroke-width': 1.2, 'stroke-dasharray': '2 3', opacity: .85 }));
     pin.appendChild(svgEl('circle', { r: 11, fill: on ? 'var(--live)' : '#11151A', stroke: on ? 'var(--live)' : (d.critical ? 'var(--bad)' : '#9AA4B2'), 'stroke-width': 2 }));
     pin.appendChild(svgEl('path', { d: KIND_GLYPH[d.kind] || KIND_GLYPH.other, fill: 'none', stroke: on ? '#1A1D21' : '#D5D1C5', 'stroke-width': 1.4, 'stroke-linecap': 'round' }));
     if (d.critical) pin.appendChild(svgEl('circle', { cx: 8, cy: -8, r: 3.5, fill: 'var(--bad)' }));
@@ -832,7 +908,7 @@ function renderPlanView() {
       lk.textContent = '⚿'; pin.appendChild(lk);
     }
     if (d.verify === 'verified') pin.appendChild(svgEl('circle', { cx: -8, cy: -8, r: 3.5, fill: 'var(--ok)' }));
-    if (state.showAll || on) {
+    if (state.showAll || on || tied) {
       const lab = svgEl('text', { y: 24, 'text-anchor': 'middle', fill: on ? 'var(--live)' : '#98A2B0', 'font-size': 10, 'font-family': 'var(--mono)', 'paint-order': 'stroke', stroke: '#0F1216', 'stroke-width': 3 });
       const c = circuitById(d.circuitId), b = c && breakerById(c.breakerId);
       lab.textContent = trunc(d.label || (b ? '#' + b.slot + (c.sub || '') : 'unassigned'), 18);
@@ -1084,7 +1160,7 @@ function createDeviceAt(x, y) {
       id: uid('dev'), circuitId, floorId: f.id, roomId: state.placing ? state.placing.roomId : null,
       x, y, kind, label: '', watts: def ? def.w : 0, critical: false, locked: false,
       verify: state.discovery ? 'verified' : 'unverified',
-      notes: '', photoKey: null
+      controls: [], notes: '', photoKey: null
     };
     P().devices.push(d);
     state.sel = { breaker: state.discovery ? state.discoveryBreaker : null, circuit: null, device: state.discovery ? null : d.id, room: null };
@@ -1095,7 +1171,14 @@ function assignDeviceToDiscovery(d) {
   const cs = circuitsOf(state.discoveryBreaker);
   if (!cs.length) return;
   edit(() => { d.circuitId = cs[0].id; d.verify = 'verified'; });
-  render(); toast('Assigned to slot ' + breakerById(state.discoveryBreaker).slot);
+  render();
+  /* Discovery reads "this went dead" as "this is on that breaker". A load
+     with a switch has a second way of being dead, so say so before the
+     assignment gets trusted. */
+  const sw = controllersOf(d);
+  toast(sw.length
+    ? `Assigned to slot ${breakerById(state.discoveryBreaker).slot} — check ${sw.length === 1 ? deviceName(sw[0]) + ' was' : 'its switches were'} on`
+    : 'Assigned to slot ' + breakerById(state.discoveryBreaker).slot);
 }
 async function toggleDiscovery() {
   state.discovery = !state.discovery;
@@ -1209,6 +1292,11 @@ function codeChecks() {
   P().devices.forEach(d => {
     if (!d.circuitId) add('warn', `Device “${d.label || d.kind}” is not assigned to any circuit.`, '');
     if (!d.roomId) add('info', `Device “${d.label || d.kind}” has no room assignment.`, '');
+    /* A control link crossing circuits means both circuits' conductors share
+       an enclosure. One breaker off is not safe there — this is the finding
+       the link exists to make possible. */
+    const foreign = controlsOf(d).filter(t => d.circuitId && t.circuitId && t.circuitId !== d.circuitId);
+    if (foreign.length) add('warn', `“${deviceName(d)}” is on ${circuitLabel(circuitById(d.circuitId))} but controls ${foreign.map(t => `“${deviceName(t)}” on ${circuitLabel(circuitById(t.circuitId))}`).join(', ')}. Two circuits in one box — turn both off before opening it.`, '');
   });
   const order = { bad: 0, warn: 1, info: 2 };
   return out.sort((a, b) => order[a.sev] - order[b.sev]);
@@ -1411,7 +1499,7 @@ function renderDevicesView() {
         if (!kill.length) return toast('All selected devices are locked');
         if (!confirm(`Delete ${kill.length} device${kill.length === 1 ? '' : 's'}?${held ? ` (${held} locked and kept)` : ''}`)) return;
         const ids = new Set(kill.map(d => d.id));
-        edit(() => { P().devices = P().devices.filter(d => !ids.has(d.id)); });
+        edit(() => { P().devices = P().devices.filter(d => !ids.has(d.id)); dropControlLinks(ids); });
         state.devSelected.clear(); render(); } }, ['Delete']));
     bulk.appendChild(r2);
     pad.appendChild(bulk);
@@ -1875,6 +1963,97 @@ function startPlacing(circuitId) {
   render(); toast('Tap the plan to place a device — keep tapping to add more');
 }
 
+/* What a switch operates, and what operates a load. Deliberately its own
+   card rather than a step in the trace: a switch is not where a light gets
+   its power from, and folding the two together would make the trace lie. */
+function sideControls(side, d, locked) {
+  const mine = controlsOf(d), by = controllersOf(d);
+  if (!takesControls(d) && !by.length) return;
+
+  const jump = t => () => {
+    if (t.floorId) state.floorId = t.floorId;
+    state.sel = { breaker: null, circuit: null, device: t.id, room: null };
+    render();
+  };
+  const row = (t, note, onDrop) => {
+    const li = el('li', { onclick: jump(t) });
+    li.appendChild(el('span', { class: 'dot', style: `background:${t.critical ? 'var(--bad)' : 'var(--steel-500)'}` }));
+    const cc = circuitById(t.circuitId), rm = roomById(t.roomId), fl = floorById(t.floorId);
+    const where = [rm ? rm.name : 'no room', cc ? circuitLabel(cc) : 'unassigned']
+      .concat(fl && fl.id !== d.floorId ? [fl.name] : []).join(' · ');
+    li.appendChild(el('div', { style: 'flex:1', html: `${esc(deviceName(t))}<div class="sub">${esc(where + note)}</div>` }));
+    if (onDrop) li.appendChild(el('button', {
+      class: 'iconbtn ghost', title: 'Remove this link', style: 'padding:2px 7px;line-height:1.2',
+      disabled: locked ? 'disabled' : null,
+      onclick: e => { e.stopPropagation(); onDrop(); }
+    }, ['×']));
+    return li;
+  };
+  /* A switch and what it operates normally share a circuit. When they do
+     not, the conductors of two circuits meet in one box, and killing one
+     breaker leaves the other live in there. Worth saying out loud. */
+  const crossed = list => list.filter(t => d.circuitId && t.circuitId && t.circuitId !== d.circuitId);
+
+  if (takesControls(d)) {
+    const c = el('div', { class: 'card' });
+    c.appendChild(el('h3', {}, ['Controls']));
+    if (mine.length) {
+      const ul = el('ul', { class: 'list' });
+      mine.forEach(t => ul.appendChild(row(t, multiwayNote(t, d), () => {
+        edit(() => { d.controls = (d.controls || []).filter(id => id !== t.id); });
+        render();
+      })));
+      c.appendChild(ul);
+    } else {
+      c.appendChild(el('div', { class: 'empty' }, ['Nothing recorded yet. Say what this switch operates and the plan will draw the link.']));
+    }
+
+    /* Candidates, current floor first: a switch almost always operates
+       something in the room it stands in. */
+    const cand = P().devices
+      .filter(x => x.id !== d.id && !(d.controls || []).includes(x.id))
+      .sort((a, b) => (a.floorId === d.floorId ? 0 : 1) - (b.floorId === d.floorId ? 0 : 1)
+        || String(roomById(a.roomId) && roomById(a.roomId).name).localeCompare(String(roomById(b.roomId) && roomById(b.roomId).name))
+        || deviceName(a).localeCompare(deviceName(b)));
+    const pick = el('select', { class: 'i', disabled: locked ? 'disabled' : null,
+      onchange: e => {
+        const id = e.target.value; if (!id) return;
+        edit(() => { d.controls = (d.controls || []).concat(id); });
+        render();
+      } });
+    pick.appendChild(el('option', { value: '' }, [cand.length ? '+ Add what this controls…' : 'No other devices yet']));
+    let group = null, gnode = null;
+    cand.forEach(x => {
+      const fl = floorById(x.floorId), gname = fl ? fl.name : 'No floor';
+      if (gname !== group) { group = gname; gnode = el('optgroup', { label: gname }); pick.appendChild(gnode); }
+      const rm = roomById(x.roomId);
+      gnode.appendChild(el('option', { value: x.id }, [`${deviceName(x)} — ${rm ? rm.name : 'no room'}`]));
+    });
+    c.appendChild(pick);
+
+    const bad = crossed(mine);
+    if (bad.length) c.appendChild(el('div', { class: 'hint', style: 'margin-top:8px;color:var(--warn)' },
+      [`On a different circuit: ${bad.map(deviceName).join(', ')}. Two circuits meet in this box — killing one breaker leaves the other live inside it.`]));
+    else c.appendChild(el('div', { class: 'hint', style: 'margin-top:8px' },
+      ['What this switch operates, not how it is wired. Power still traces circuit → breaker → panel; the link only records what goes dark when the switch does.']));
+    side.appendChild(c);
+  }
+
+  if (by.length) {
+    const c = el('div', { class: 'card' });
+    c.appendChild(el('h3', {}, ['Controlled by']));
+    const ul = el('ul', { class: 'list' });
+    by.forEach(sw => ul.appendChild(row(sw, '', null)));
+    c.appendChild(ul);
+    if (by.length > 1) c.appendChild(el('div', { class: 'hint', style: 'margin-top:8px' },
+      [by.length === 2 ? '3-way — either switch works it.' : `Switched from ${by.length} places.`]));
+    const bad = crossed(by);
+    if (bad.length) c.appendChild(el('div', { class: 'hint', style: 'margin-top:8px;color:var(--warn)' },
+      [`${bad.map(deviceName).join(', ')} ${bad.length === 1 ? 'is' : 'are'} on a different circuit — both breakers must be off before opening either box.`]));
+    side.appendChild(c);
+  }
+}
+
 function sideDevice(side, d) {
   if (!d) return sideOverview(side);
   const locked = !!d.locked;
@@ -1904,6 +2083,8 @@ function sideDevice(side, d) {
                : 'Locking stops accidental drags on the plan.']));
   side.appendChild(c);
 
+  sideControls(side, d, locked);
+
   /* trace */
   const tr = el('div', { class: 'card' });
   tr.appendChild(el('h3', {}, ['Trace to source']));
@@ -1924,7 +2105,7 @@ function sideDevice(side, d) {
   nt.appendChild(photoControl(d));
   nt.appendChild(el('button', { class: 'iconbtn', style: 'width:100%;margin-top:10px;border-color:var(--bad);color:var(--bad)',
     disabled: locked ? 'disabled' : null,
-    onclick: () => { if (!confirm('Delete this device?')) return; edit(() => { P().devices = P().devices.filter(x => x.id !== d.id); state.sel.device = null; }); render(); } }, ['Delete device']));
+    onclick: () => { if (!confirm('Delete this device?')) return; edit(() => { P().devices = P().devices.filter(x => x.id !== d.id); dropControlLinks([d.id]); state.sel.device = null; }); render(); } }, ['Delete device']));
   side.appendChild(nt);
 }
 
@@ -1992,7 +2173,10 @@ function sideFloor(side, secondary) {
   dl.appendChild(el('h3', {}, ['Delete floor']));
   dl.appendChild(el('button', { class: 'iconbtn', style: 'width:100%;border-color:var(--bad);color:var(--bad)',
     onclick: () => { if (!confirm('Delete ' + f.name + ' with its rooms and pins?')) return;
-      edit(() => { P().devices = P().devices.filter(d => d.floorId !== f.id); P().rooms = P().rooms.filter(r => r.floorId !== f.id); P().floors = P().floors.filter(x => x.id !== f.id); state.floorId = null; });
+      edit(() => {
+        const gone = new Set(P().devices.filter(d => d.floorId === f.id).map(d => d.id));
+        P().devices = P().devices.filter(d => d.floorId !== f.id); dropControlLinks(gone);
+        P().rooms = P().rooms.filter(r => r.floorId !== f.id); P().floors = P().floors.filter(x => x.id !== f.id); state.floorId = null; });
       state.planFitted = false; render(); } }, ['Delete this floor']));
   side.appendChild(dl);
 }
@@ -2384,15 +2568,16 @@ function exportJSON() {
           : 'Project data exported');
 }
 function exportCSV() {
-  const rows = [['panel', 'slot', 'sub', 'amps', 'poles', 'type', 'wire', 'leg', 'label', 'hacr', 'locked', 'tie', 'subpanel', 'verify', 'room', 'floor', 'device', 'kind', 'va', 'critical']];
+  const rows = [['panel', 'slot', 'sub', 'amps', 'poles', 'type', 'wire', 'leg', 'label', 'hacr', 'locked', 'tie', 'subpanel', 'verify', 'room', 'floor', 'device', 'kind', 'va', 'critical', 'controls']];
   P().panels.forEach(p2 => breakersOf(p2.id).forEach(b => circuitsOf(b.id).forEach(c => {
     const ds = devicesOf(c.id);
     const base = [p2.name, slotsFor(b.slot, b.poles).join('/'), c.sub || '', b.amps, b.poles, b.type, b.wire, legOf(p2, b.slot),
       c.label || b.label || '', b.hacr, b.locked, b.tieId ? 'yes' : '', b.subpanelId ? panelById(b.subpanelId).name : '', b.verify];
-    if (!ds.length) rows.push(base.concat(['', '', '', '', '', '']));
+    if (!ds.length) rows.push(base.concat(['', '', '', '', '', '', '']));
     ds.forEach(d => {
       const r = roomById(d.roomId), f = floorById(d.floorId);
-      rows.push(base.concat([r ? r.name : '', f ? f.name : '', d.label || '', d.kind, d.watts, d.critical]));
+      rows.push(base.concat([r ? r.name : '', f ? f.name : '', d.label || '', d.kind, d.watts, d.critical,
+        controlsOf(d).map(deviceName).join('; ')]));
     });
   })));
   const csv = rows.map(r => r.map(v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -2403,6 +2588,7 @@ function exportCSV() {
    reset for the new data gets forgotten by one of the import paths. */
 function adoptProject(data) {
   state.project = data;
+  pruneControlLinks(data);
   state.panelId = data.panels.length ? data.panels[0].id : null;
   state.floorId = null;
   state.planFitted = false;
@@ -2711,6 +2897,7 @@ async function boot() {
   let proj = null;
   try { proj = await Store.get('kv', 'project'); } catch (e) {}
   state.project = proj && proj.panels ? proj : newProject();
+  pruneControlLinks(P());
   state.panelId = P().panels[0].id;
   await loadImages();
 

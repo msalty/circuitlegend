@@ -2,7 +2,7 @@
    Scope is the directory this file is served from, so the app can
    live at /breakers/ alongside other PWAs on the same origin.
    Cache names are namespaced to avoid colliding with sibling apps. */
-const CACHE = 'circuitlegend-v3';
+const CACHE = 'circuitlegend-v4';
 const ASSETS = ['./', './index.html', './app.js', './manifest.webmanifest'];
 
 self.addEventListener('install', e => {

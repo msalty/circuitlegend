@@ -248,6 +248,39 @@ so does `Esc`. On desktop the rail header carries **Deselect** and **Hide**
 rail is a sheet: **Close**, tap outside, or drag the grabber down, and
 **Details** reopens it.
 
+## Switches and what they control
+
+A switch is the one device that makes something else go dead without a breaker
+moving, so it carries a list of what it operates. Select a switch and the
+**Controls** card lists its loads; pick more from the dropdown, or drop one with
+the `×`. The load's own inspector answers the other direction under **Controlled
+by**, computed from the switches rather than stored twice.
+
+Select either end and the plan draws a dashed line between them, keeps the far
+ends out of the dimming, and labels them. Two switches on one load are named as a
+3-way; more than two are counted.
+
+This records *what a switch operates, not how it is wired*. Power still traces
+circuit → breaker → panel, and **Trace to source** is unchanged — a switch is not
+where a light gets its power from, and folding the two together would make the
+trace lie. There are no conductors, travelers or switch loops in the model, and
+none planned.
+
+Three things get better for the entry:
+
+- **The checks gain a real finding.** A switch on one circuit operating a load on
+  another means both circuits' conductors share an enclosure, and killing one
+  breaker leaves the other live inside it. Flagged as a warning, from both ends.
+- **Discovery stops lying to you.** Discovery reads "this went dead" as "this is
+  on that breaker", but a switched load has a second way of being dead. Tapping
+  one now assigns it and reminds you to check the switch was on.
+- **The printed CSV carries it**, in a `controls` column beside the device rows.
+
+Links survive deletes: removing a device, a selection of devices, or a whole
+floor strips the references pointing at what went. Projects made before the field
+existed simply have none — nothing to migrate — and a hand-edited JSON pointing
+at devices that are not in the file is cleaned up on import.
+
 ## Keyboard
 
 - `Ctrl`/`Cmd` + `Z` — undo
@@ -271,12 +304,18 @@ violations.
 **Subpanel** on a breaker makes that breaker a feeder. Downstream load rolls up
 into the feeder's VA, phase balance, and impact analysis automatically.
 
+**Controls** on a device is the only link in the model that crosses sideways.
+Everything else hangs off a parent id — device → circuit → breaker → panel — so
+it cleans itself up when a parent list is filtered; control links are chased
+explicitly on delete. Stored on the switch, one-directional, ids only.
+
 ## Checks
 
 Advisory only. Wire ampacity uses the 240.4(D) small-conductor limits for 14/12/10
 AWG and the 75 °C copper table above that; GFCI and AFCI expectations are keyed to
-room type. Code adoption varies by jurisdiction and cycle. This is a documentation
-tool, not an inspection.
+room type. A switch controlling a load on a different circuit is flagged because
+two circuits then share an enclosure. Code adoption varies by jurisdiction and
+cycle. This is a documentation tool, not an inspection.
 
 ## Not built yet
 
